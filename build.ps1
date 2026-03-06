@@ -823,11 +823,9 @@ sed -i "s/grep -qE 'LNK4044|lld-link: warning: ignoring unknown argument'/false/
     --enable-demuxer=concat \
     --enable-muxer=matroska \
     --enable-muxer=webm \
-    --enable-muxer=ivf \
     --enable-demuxer=ogg \
     --enable-muxer=segment \
     --enable-muxer=mp4 \
-    --enable-bsf=aac_adtstoasc \
     --enable-bsf=extract_extradata
 make -j$(nproc)
 '@
