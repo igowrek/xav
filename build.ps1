@@ -731,27 +731,39 @@ $msvcLibPath = Get-ChildItem "$vsPath\VC\Tools\MSVC" |
 Sort-Object Name -Descending | Select-Object -First 1 |
 ForEach-Object { "$($_.FullName)\lib\x64" }
 
-$sdkVersion = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots' `
-        -Name KitsRoot10 -ErrorAction SilentlyContinue) | ForEach-Object {
-    Get-ChildItem "$($_.KitsRoot10)Lib" -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty Name
+$candidateRoots = @(
+    (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots' -Name KitsRoot10 -ErrorAction SilentlyContinue).KitsRoot10,
+    "${env:ProgramFiles(x86)}\Windows Kits\10",
+    "$env:ProgramFiles\Windows Kits\10"
+)
+
+$sdkRoot = $null
+$sdkVersion = $null
+
+foreach ($root in $candidateRoots) {
+    if ($root -and (Test-Path $root)) {
+        $foundVer = Get-ChildItem "$root\Lib" -ErrorAction SilentlyContinue | Where-Object { Test-Path "$($_.FullName)\um\x64" -and Test-Path "$($_.FullName)\ucrt\x64" } | Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty Name
+        if ($foundVer) {
+            $sdkRoot = $root
+            $sdkVersion = $foundVer
+            break
+        }
+    }
 }
-$sdkRoot = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots' -ErrorAction SilentlyContinue).KitsRoot10
 
-if (-not $sdkRoot -or -not (Test-Path $sdkRoot)) {
-    if (Test-Path "${env:ProgramFiles(x86)}\Windows Kits\10") {
-        $sdkRoot = "${env:ProgramFiles(x86)}\Windows Kits\10"
-    }
-    elseif (Test-Path "$env:ProgramFiles\Windows Kits\10") {
-        $sdkRoot = "$env:ProgramFiles\Windows Kits\10"
-    }
-
-    if (-not $sdkVersion -and $sdkRoot) {
-        $sdkVersion = Get-ChildItem "$sdkRoot\Lib" -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty Name
-    }
+if (-not $sdkRoot -or -not $sdkVersion) {
+    Write-Host "[ERROR] Could not find a valid Windows 10/11 SDK installation with um\x64 and ucrt\x64 libraries." -ForegroundColor Red
+    Read-Host "Press Enter to exit"
+    exit 1
 }
 
-$sdkLibUm = "$sdkRoot\lib\$sdkVersion\um\x64"
-$sdkLibUcrt = "$sdkRoot\lib\$sdkVersion\ucrt\x64"
+$sdkLibUm = "$sdkRoot\Lib\$sdkVersion\um\x64"
+$sdkLibUcrt = "$sdkRoot\Lib\$sdkVersion\ucrt\x64"
+
+if (-not (Test-Path $sdkLibUm)) { Write-Host "[ERROR] Windows SDK lib um\x64 not found at $sdkLibUm." -ForegroundColor Red; Read-Host "Press Enter to exit"; exit 1 }
+if (-not (Test-Path $sdkLibUcrt)) { Write-Host "[ERROR] Windows SDK lib ucrt\x64 not found at $sdkLibUcrt." -ForegroundColor Red; Read-Host "Press Enter to exit"; exit 1 }
+if (-not (Test-Path $msvcLibPath)) { Write-Host "[ERROR] MSVC lib not found at $msvcLibPath." -ForegroundColor Red; Read-Host "Press Enter to exit"; exit 1 }
+
 $msvcLibPathShort = (New-Object -ComObject Scripting.FileSystemObject).GetFolder($msvcLibPath).ShortPath
 $sdkLibUmShort = (New-Object -ComObject Scripting.FileSystemObject).GetFolder($sdkLibUm).ShortPath
 $sdkLibUcrtShort = (New-Object -ComObject Scripting.FileSystemObject).GetFolder($sdkLibUcrt).ShortPath
