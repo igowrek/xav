@@ -15,7 +15,6 @@ function Install-Cuda129 {
     $actual = (Get-FileHash $installer -Algorithm SHA256).Hash
     if ($actual -ne $sha256) {
         Write-Host "[ERROR] CUDA installer checksum mismatch. Expected $sha256, got $actual." -ForegroundColor Red
-        Read-Host "Press Enter to exit"
         exit 1
     }
 
@@ -23,12 +22,12 @@ function Install-Cuda129 {
     $proc = Start-Process -FilePath $installer -ArgumentList "-y -gm2 -s -n -log:`"$logPath`"" -Wait -PassThru
     if ($proc.ExitCode -ne 0) {
         Write-Host "[ERROR] CUDA 12.9.1 installer failed (exit code $($proc.ExitCode)). Log: $logPath" -ForegroundColor Red
-        Read-Host "Press Enter to exit"
         exit 1
     }
 
     Update-SessionEnvironment
     Write-Host "[INFO] CUDA Toolkit 12.9.1 installed successfully." -ForegroundColor Green
+    Remove-Item -Path $installer -Force -ErrorAction SilentlyContinue
 }
 function Install-Cuda132 {
     $url = 'https://developer.download.nvidia.com/compute/cuda/13.2.0/local_installers/cuda_13.2.0_windows.exe'
@@ -43,7 +42,6 @@ function Install-Cuda132 {
     $actual = (Get-FileHash $installer -Algorithm SHA256).Hash
     if ($actual -ne $sha256) {
         Write-Host "[ERROR] CUDA installer checksum mismatch. Expected $sha256, got $actual." -ForegroundColor Red
-        Read-Host "Press Enter to exit"
         exit 1
     }
 
@@ -51,12 +49,12 @@ function Install-Cuda132 {
     $proc = Start-Process -FilePath $installer -ArgumentList "-y -gm2 -s -n -log:`"$logPath`"" -Wait -PassThru
     if ($proc.ExitCode -ne 0) {
         Write-Host "[ERROR] CUDA 13.2.0 installer failed (exit code $($proc.ExitCode)). Log: $logPath" -ForegroundColor Red
-        Read-Host "Press Enter to exit"
         exit 1
     }
 
     Update-SessionEnvironment
     Write-Host "[INFO] CUDA Toolkit 13.2.0 installed successfully." -ForegroundColor Green
+    Remove-Item -Path $installer -Force -ErrorAction SilentlyContinue
 }
 
 function Invoke-Step {
@@ -65,7 +63,6 @@ function Invoke-Step {
     & $Action
     if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
         Write-Host "[ERROR] $Label failed (exit code $LASTEXITCODE)." -ForegroundColor Red
-        Read-Host "Press Enter to exit"
         exit 1
     }
 }
@@ -90,7 +87,7 @@ function Get-Avx512Supported {
         return [System.Runtime.Intrinsics.X86.Avx512F]::IsSupported
     }
     catch {
-        Write-Host "[INFO] Could not detect AVX512 support (requires PowerShell 7+). Enabling anyway - SVT-AV1 detects CPU capabilities at runtime." -ForegroundColor Cyan
+        Write-Host "[INFO] Could not detect AVX512 support (requires PowerShell 7+). Enabling anyway." -ForegroundColor Cyan
         return $true
     }
 }
@@ -107,14 +104,12 @@ function Confirm-Install {
     $choice = Read-Host "Do you want to install it using winget? (Y/N) [Default: Y]"
     if ($choice -ieq 'N') {
         Write-Host "[ERROR] $AppName is required. Exiting." -ForegroundColor Red
-        Read-Host "Press Enter to exit"
         exit 1
     }
     Write-Host "[INFO] Installing $AppName..." -ForegroundColor Cyan
-    winget install -e --id $WingetId --source winget --accept-source-agreements --accept-package-agreements
+    winget install -e --id $WingetId --accept-source-agreements --accept-package-agreements
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[ERROR] Failed to install $AppName." -ForegroundColor Red
-        Read-Host "Press Enter to exit"
         exit 1
     }
     Update-SessionEnvironment
@@ -134,7 +129,26 @@ switch ($vshipChoice) {
     '3' { $vshipBackend = 'vulkan' }
     default {
         Write-Host "[ERROR] Invalid choice." -ForegroundColor Red
-        Read-Host "Press Enter to exit"
+        exit 1
+    }
+}
+
+Write-Host ""
+Write-Host "Select SVT-AV1 variant to compile:"
+Write-Host "  1. svt-av1-hdr       (https://github.com/juliobbv-p/svt-av1-hdr)"
+Write-Host "  2. svt-av1-tritium yis branch [WARNING: DO NOT USE - testing only] (https://github.com/Uranite/svt-av1-tritium/tree/yis)"
+Write-Host "  3. svt-av1-essential (https://github.com/nekotrix/SVT-AV1-Essential/tree/Essential-v4.0.1)"
+Write-Host "  4. 5fish             (https://github.com/Akatmks/5fish-svt-av1-psy-pr/tree/dlf-bias)"
+$svtChoice = Read-Host "Enter choice (1-4) [Default: 1]"
+if (-not $svtChoice) { $svtChoice = '1' }
+
+switch ($svtChoice) {
+    '1' { $svtVariant = 'svt-av1-hdr'; $svtRepo = 'https://github.com/juliobbv-p/svt-av1-hdr.git'; $svtBranch = ''; $svtDir = 'svt-av1-hdr'; $svtExtraCFlags = '' }
+    '2' { $svtVariant = 'svt-av1-tritium-yis'; $svtRepo = 'https://github.com/Uranite/svt-av1-tritium.git'; $svtBranch = 'yis'; $svtDir = 'svt-av1-tritium'; $svtExtraCFlags = '' }
+    '3' { $svtVariant = 'svt-av1-essential'; $svtRepo = 'https://github.com/nekotrix/SVT-AV1-Essential.git'; $svtBranch = 'Essential-v4.0.1'; $svtDir = 'SVT-AV1-Essential'; $svtExtraCFlags = '' }
+    '4' { $svtVariant = '5fish'; $svtRepo = 'https://github.com/Akatmks/5fish-svt-av1-psy-pr.git'; $svtBranch = 'dlf-bias'; $svtDir = '5fish-svt-av1-psy-pr'; $svtExtraCFlags = ' -DSVT_LOG_QUIET' }
+    default {
+        Write-Host "[ERROR] Invalid choice." -ForegroundColor Red
         exit 1
     }
 }
@@ -174,13 +188,11 @@ if ($vshipBackend -eq 'cuda') {
         $cudaWingetId = $null
     }
     else {
-        Write-Host "[INFO] Legacy GPU detected. Using CUDA 12.9 and VS 2026 Build Tools with v143 MSVC." -ForegroundColor Cyan
+        Write-Host "[INFO] Legacy GPU detected. Using CUDA 12.9 and VS 2026 Build Tools with MSVC v143." -ForegroundColor Cyan
         $vsIncludeV143 = $true
         $cudaWingetId = $null  # no winget package exists; installed manually via Install-Cuda129
     }
 }
-
-Write-Host "[INFO] Checking basic system dependencies..." -ForegroundColor Cyan
 
 if (-not (Assert-Command 'git')) {
     Confirm-Install "Git" "Git.Git"
@@ -207,12 +219,10 @@ if (-not (Assert-Command 'clang++')) {
 
 if (-not (Assert-Command 'clang++')) {
     Write-Host "[ERROR] clang++ not found after LLVM setup." -ForegroundColor Red
-    Read-Host "Press Enter to exit"
     exit 1
 }
 if (-not (Assert-Command 'llvm-ar')) {
     Write-Host "[ERROR] llvm-ar not found after LLVM setup." -ForegroundColor Red
-    Read-Host "Press Enter to exit"
     exit 1
 }
 
@@ -246,17 +256,17 @@ if (-not (Assert-Command 'cargo')) {
 }
 
 function Find-Msys2Root {
-    # 1. Well-known default path
+    # Well-known default path
     $candidates = @('C:\msys64')
 
-    # 2. Scoop (per-user and global)
+    # Scoop (per-user and global)
     $candidates += "$env:USERPROFILE\scoop\apps\msys2\current"
     $candidates += "$env:ProgramData\scoop\apps\msys2\current"
 
     $found = $candidates | Where-Object { Test-Path "$_\usr\bin\bash.exe" } | Select-Object -First 1
     if ($found) { return $found }
 
-    # 3. Registry uninstall entries (covers custom install paths)
+    # Registry uninstall entries (covers custom install paths)
     $regRoots = @(
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
         'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
@@ -281,7 +291,6 @@ if (-not $msysRoot) {
     $msysRoot = Find-Msys2Root
     if (-not $msysRoot) {
         Write-Host "[ERROR] MSYS2 not found after install. Please re-run the script or set the path manually." -ForegroundColor Red
-        Read-Host "Press Enter to exit"
         exit 1
     }
 }
@@ -292,7 +301,6 @@ Write-Host "[INFO] Setting Rust toolchain to nightly..." -ForegroundColor Cyan
 rustup default nightly
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[ERROR] Failed to set Rust toolchain to nightly." -ForegroundColor Red
-    Read-Host "Press Enter to exit"
     exit 1
 }
 
@@ -307,7 +315,6 @@ if (-not $hasCppTools) {
     $choice = Read-Host "Do you want to install it? (Y/N) [Default: Y]"
     if ($choice -ieq 'N') {
         Write-Host "[ERROR] Visual Studio Build Tools are required. Exiting." -ForegroundColor Red
-        Read-Host "Press Enter to exit"
         exit 1
     }
     Write-Host "[INFO] Installing Visual Studio Build Tools with Desktop C++ workload (this may take a while)..." -ForegroundColor Cyan
@@ -330,7 +337,6 @@ if (-not $hasCppTools) {
         $vsInstallerPath = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
         if (-not (Test-Path $vsInstallerPath)) {
             Write-Host "[ERROR] Could not find vs_installer.exe. Please open Visual Studio Installer manually and add the 'Desktop development with C++' workload." -ForegroundColor Red
-            Read-Host "Press Enter to exit"
             exit 1
         }
         $existingInstallPath = & $vswhere -latest -products * -property installationPath
@@ -340,7 +346,6 @@ if (-not $hasCppTools) {
             -Verb RunAs -Wait
         if ($LASTEXITCODE -ne 0) {
             Write-Host "[ERROR] Failed to modify Visual Studio Build Tools. Please open Visual Studio Installer manually and add the 'Desktop development with C++' workload." -ForegroundColor Red
-            Read-Host "Press Enter to exit"
             exit 1
         }
     }
@@ -357,7 +362,6 @@ if ($vshipBackend -eq 'cuda' -and -not $env:CUDA_PATH) {
         $choice = Read-Host "Do you want to install it? (Y/N) [Default: Y]"
         if ($choice -ieq 'N') {
             Write-Host "[ERROR] CUDA Toolkit is required. Exiting." -ForegroundColor Red
-            Read-Host "Press Enter to exit"
             exit 1
         }
         Install-Cuda132
@@ -368,19 +372,24 @@ if ($vshipBackend -eq 'cuda' -and -not $env:CUDA_PATH) {
         $choice = Read-Host "Do you want to install it? (Y/N) [Default: Y]"
         if ($choice -ieq 'N') {
             Write-Host "[ERROR] CUDA Toolkit is required. Exiting." -ForegroundColor Red
-            Read-Host "Press Enter to exit"
             exit 1
         }
         Install-Cuda129
     }
     if (-not $env:CUDA_PATH) {
         Write-Host "[ERROR] CUDA_PATH still not set after install. Try restarting your terminal, or set CUDA_PATH manually." -ForegroundColor Red
-        Read-Host "Press Enter to exit"
         exit 1
     }
 }
 
 if ($vshipBackend -eq 'hip' -and -not $env:HIP_PATH) {
+    Write-Host ""
+    Write-Host "[PROMPT] AMD HIP SDK is missing." -ForegroundColor Yellow
+    $choice = Read-Host "Do you want to install it? (Y/N) [Default: Y]"
+    if ($choice -ieq 'N') {
+        Write-Host "[ERROR] AMD HIP SDK is required. Exiting." -ForegroundColor Red
+        exit 1
+    }
     Write-Host "[INFO] Downloading AMD HIP SDK..." -ForegroundColor Cyan
     $hipInstaller = "$env:TEMP\AMD-HIP-Setup.exe"
     Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-26.Q1-Win11-For-HIP.exe" -OutFile $hipInstaller
@@ -389,17 +398,17 @@ if ($vshipBackend -eq 'hip' -and -not $env:HIP_PATH) {
     Update-SessionEnvironment
     if (-not $env:HIP_PATH) {
         Write-Host "[ERROR] HIP_PATH still not set after install. Try restarting your terminal, or set HIP_PATH manually." -ForegroundColor Red
-        Read-Host "Press Enter to exit"
         exit 1
     }
+    Remove-Item -Path $hipInstaller -Force -ErrorAction SilentlyContinue
 }
 
 # Vulkan SDK is always required for the hwaccel feature
 if (-not $env:VULKAN_SDK) {
+    Write-Host "[INFO] Vulkan SDK is always required for the hwaccel feature." -ForegroundColor Cyan
     Confirm-Install "Vulkan SDK" "KhronosGroup.VulkanSDK"
     if (-not $env:VULKAN_SDK) {
         Write-Host "[ERROR] VULKAN_SDK not found. Try restarting your terminal, or set VULKAN_SDK manually." -ForegroundColor Red
-        Read-Host "Press Enter to exit"
         exit 1
     }
 }
@@ -419,13 +428,14 @@ Invoke-Step "Installing MSYS2 base dependencies" {
 $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $vsPath) {
     Write-Host "[ERROR] Visual Studio with C++ tools not found." -ForegroundColor Red
-    Read-Host "Press Enter to exit"
     exit 1
 }
 
 # ============================================================
 #  Compile Vship
 # ============================================================
+
+if (-not (Test-Path 'lib')) { New-Item -ItemType Directory 'lib' | Out-Null }
 
 if (Test-Path 'lib\libvship.lib') {
     Write-Host "[INFO] Vship already compiled. Skipping..." -ForegroundColor Cyan
@@ -492,7 +502,6 @@ else {
         }
     }
 
-    if (-not (Test-Path '..\lib')) { New-Item -ItemType Directory '..\lib' | Out-Null }
     Copy-Item libvship.lib ..\lib\ -Force
 
     Pop-Location
@@ -501,27 +510,6 @@ else {
 $avx512Supported = Get-Avx512Supported
 $svtAvx512Flag = if ($avx512Supported) { 'ON' } else { 'OFF' }
 Write-Host "[INFO] AVX512 support detected: $avx512Supported. SVT-AV1 will be built with -DENABLE_AVX512=$svtAvx512Flag." -ForegroundColor Cyan
-
-Write-Host ""
-Write-Host "Select SVT-AV1 variant to compile:"
-Write-Host "  1. svt-av1-hdr       (https://github.com/juliobbv-p/svt-av1-hdr)"
-Write-Host "  2. svt-av1-tritium yis branch [WARNING: DO NOT USE - testing only] (https://github.com/Uranite/svt-av1-tritium/tree/yis)"
-Write-Host "  3. svt-av1-essential (https://github.com/nekotrix/SVT-AV1-Essential/tree/Essential-v4.0.1)"
-Write-Host "  4. 5fish             (https://github.com/Akatmks/5fish-svt-av1-psy-pr/tree/dlf-bias)"
-$svtChoice = Read-Host "Enter choice (1-4) [Default: 1]"
-if (-not $svtChoice) { $svtChoice = '1' }
-
-switch ($svtChoice) {
-    '1' { $svtVariant = 'svt-av1-hdr'; $svtRepo = 'https://github.com/juliobbv-p/svt-av1-hdr.git'; $svtBranch = ''; $svtDir = 'svt-av1-hdr'; $svtExtraCFlags = '' }
-    '2' { $svtVariant = 'svt-av1-tritium-yis'; $svtRepo = 'https://github.com/Uranite/svt-av1-tritium.git'; $svtBranch = 'yis'; $svtDir = 'svt-av1-tritium'; $svtExtraCFlags = '' }
-    '3' { $svtVariant = 'svt-av1-essential'; $svtRepo = 'https://github.com/nekotrix/SVT-AV1-Essential.git'; $svtBranch = 'Essential-v4.0.1'; $svtDir = 'SVT-AV1-Essential'; $svtExtraCFlags = '' }
-    '4' { $svtVariant = '5fish'; $svtRepo = 'https://github.com/Akatmks/5fish-svt-av1-psy-pr.git'; $svtBranch = 'dlf-bias'; $svtDir = '5fish-svt-av1-psy-pr'; $svtExtraCFlags = ' -DSVT_LOG_QUIET' }
-    default {
-        Write-Host "[ERROR] Invalid choice." -ForegroundColor Red
-        Read-Host "Press Enter to exit"
-        exit 1
-    }
-}
 
 if (Test-Path $svtDir) {
     Push-Location $svtDir; git pull; Pop-Location
@@ -544,7 +532,6 @@ Invoke-Step "Configuring $svtVariant" {
 }
 Invoke-Step "Building $svtVariant" { ninja -C svt_build }
 Pop-Location
-if (-not (Test-Path 'lib')) { New-Item -ItemType Directory 'lib' | Out-Null }
 Copy-Item $svtDir\Bin\Release\SvtAv1Enc.lib lib\ -Force
 
 if (Test-Path 'lib\opus.lib') {
@@ -562,7 +549,6 @@ else {
     }
     Invoke-Step "Building Opus" { ninja -C build }
     Pop-Location
-    if (-not (Test-Path 'lib')) { New-Item -ItemType Directory 'lib' | Out-Null }
     Copy-Item opus\build\opus.lib lib\ -Force
 }
 
@@ -594,14 +580,12 @@ make -j`$(nproc)
         & $msysExe -lc "cd `"$unixPath`" && sh ./build_in_msys.sh"
     }
     Pop-Location
-    if (-not (Test-Path 'lib')) { New-Item -ItemType Directory 'lib' | Out-Null }
     
     if (Test-Path 'libopusenc\.libs\opusenc.lib') {
         Copy-Item 'libopusenc\.libs\opusenc.lib' 'lib\opusenc.lib' -Force
     }
     else {
         Write-Host "[ERROR] Could not find compiled opusenc.lib output." -ForegroundColor Red
-        Read-Host "Press Enter to exit"
         exit 1
     }
 }
@@ -609,7 +593,6 @@ make -j`$(nproc)
 # ============================================================
 #  Compile Vulkan, dav1d, FFmpeg
 # ============================================================
-if (-not (Test-Path 'lib')) { New-Item -ItemType Directory 'lib' | Out-Null }
 
 if (Test-Path 'lib\vulkan-1.lib') {
     Write-Host "[INFO] Vulkan already compiled. Skipping..." -ForegroundColor Cyan
@@ -676,7 +659,6 @@ else {
         $choice = Read-Host "Do you want to install Meson $($mesonVersion)? (Y/N) [Default: Y]"
         if ($choice -ieq 'N') {
             Write-Host "[ERROR] Meson is required to build dav1d. Exiting." -ForegroundColor Red
-            Read-Host "Press Enter to exit"
             exit 1
         }
 
@@ -686,7 +668,6 @@ else {
         $actual = (Get-FileHash $mesonMsi -Algorithm SHA256).Hash
         if ($actual -ne $mesonHash.ToUpper()) {
             Write-Host "[ERROR] Meson installer checksum mismatch. Expected $mesonHash, got $actual." -ForegroundColor Red
-            Read-Host "Press Enter to exit"
             exit 1
         }
 
@@ -694,7 +675,6 @@ else {
         $proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList "/i `"$mesonMsi`" /quiet /qn ALLUSERS=1" -Wait -PassThru
         if ($proc.ExitCode -ne 0) {
             Write-Host "[ERROR] Meson installer failed (exit code $($proc.ExitCode))." -ForegroundColor Red
-            Read-Host "Press Enter to exit"
             exit 1
         }
 
@@ -706,7 +686,6 @@ else {
         }
         else {
             Write-Host "[ERROR] meson.exe not found at $mesonExe after install." -ForegroundColor Red
-            Read-Host "Press Enter to exit"
             exit 1
         }
         Write-Host "[INFO] Meson $mesonVersion installed successfully." -ForegroundColor Green
@@ -745,16 +724,15 @@ foreach ($root in $candidateRoots) {
 
 if (-not $sdkRoot -or -not $sdkVersion) {
     Write-Host "[ERROR] Could not find a valid Windows 10/11 SDK installation with um\x64 and ucrt\x64 libraries." -ForegroundColor Red
-    Read-Host "Press Enter to exit"
     exit 1
 }
 
 $sdkLibUm = "$sdkRoot\Lib\$sdkVersion\um\x64"
 $sdkLibUcrt = "$sdkRoot\Lib\$sdkVersion\ucrt\x64"
 
-if (-not (Test-Path $sdkLibUm)) { Write-Host "[ERROR] Windows SDK lib um\x64 not found at $sdkLibUm." -ForegroundColor Red; Read-Host "Press Enter to exit"; exit 1 }
-if (-not (Test-Path $sdkLibUcrt)) { Write-Host "[ERROR] Windows SDK lib ucrt\x64 not found at $sdkLibUcrt." -ForegroundColor Red; Read-Host "Press Enter to exit"; exit 1 }
-if (-not (Test-Path $msvcLibPath)) { Write-Host "[ERROR] MSVC lib not found at $msvcLibPath." -ForegroundColor Red; Read-Host "Press Enter to exit"; exit 1 }
+if (-not (Test-Path $sdkLibUm)) { Write-Host "[ERROR] Windows SDK lib um\x64 not found at $sdkLibUm." -ForegroundColor Red; exit 1 }
+if (-not (Test-Path $sdkLibUcrt)) { Write-Host "[ERROR] Windows SDK lib ucrt\x64 not found at $sdkLibUcrt." -ForegroundColor Red; exit 1 }
+if (-not (Test-Path $msvcLibPath)) { Write-Host "[ERROR] MSVC lib not found at $msvcLibPath." -ForegroundColor Red; exit 1 }
 
 $msvcLibPathShort = (New-Object -ComObject Scripting.FileSystemObject).GetFolder($msvcLibPath).ShortPath
 $sdkLibUmShort = (New-Object -ComObject Scripting.FileSystemObject).GetFolder($sdkLibUm).ShortPath
@@ -943,25 +921,9 @@ if ($svtChoice -eq '4') {
     $features += ",5fish"
 }
 
-switch ($vshipBackend) {
-    'cuda' {
-        Invoke-Step "Cargo build (CUDA)" {
-            cargo update
-            cargo build --release --features $features --config $cargoConfig
-        }
-    }
-    'hip' {
-        Invoke-Step "Cargo build (HIP)" {
-            cargo update
-            cargo build --release --features $features --config $cargoConfig
-        }
-    }
-    'vulkan' {
-        Invoke-Step "Cargo build (Vulkan)" {
-            cargo update
-            cargo build --release --features $features --config $cargoConfig
-        }
-    }
+Invoke-Step "Cargo build ($vshipBackend)" {
+    cargo update
+    cargo build --release --features $features --config $cargoConfig
 }
 
 Write-Host ""
@@ -970,4 +932,3 @@ if (-not (Test-Path 'target\release')) { New-Item -ItemType Directory 'target\re
 if (-not (Test-Path 'target\release\vulkan-1.dll')) { Copy-Item 'vulkan\install\bin\vulkan-1.dll' 'target\release\vulkan-1.dll' -Force }
 
 Write-Host "[SUCCESS] Build script finished." -ForegroundColor Green
-Read-Host "Press Enter to exit"
