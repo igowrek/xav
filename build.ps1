@@ -398,7 +398,7 @@ if ($vshipBackend -eq 'hip' -and -not $env:HIP_PATH) {
 if (-not $env:VULKAN_SDK) {
     Confirm-Install "Vulkan SDK" "KhronosGroup.VulkanSDK"
     if (-not $env:VULKAN_SDK) {
-        Write-Host "[ERROR] VULKAN_SDK still not set after install. Try restarting your PC." -ForegroundColor Red
+        Write-Host "[ERROR] VULKAN_SDK not found. If you have it installed, please set VULKAN_SDK manually, or try restarting your terminal." -ForegroundColor Red
         Read-Host "Press Enter to exit"
         exit 1
     }
@@ -446,14 +446,14 @@ else {
                 Pop-Location; Read-Host "Press Enter to exit"; exit 1
             }
             if ($vsIncludeV143) {
-                # Legacy GPU: pin nvcc to the v143 (14.4x) host compiler via -ccbin.
+                # "Legacy" GPU: use MSVC v143 via ccbin
                 $msvcBin = Get-ChildItem "$vsPath\VC\Tools\MSVC" -Directory -ErrorAction SilentlyContinue |
                 Where-Object { $_.Name -like '14.4*' } |
                 Sort-Object Name -Descending | Select-Object -First 1 |
                 ForEach-Object { "$($_.FullName)\bin\HostX64\x64" }
             }
             else {
-                # Modern GPU: use the latest available MSVC toolset.
+                # "Modern" GPU: use the latest available MSVC.
                 $msvcBin = Get-ChildItem "$vsPath\VC\Tools\MSVC" -Directory -ErrorAction SilentlyContinue |
                 Sort-Object Name -Descending | Select-Object -First 1 |
                 ForEach-Object { "$($_.FullName)\bin\HostX64\x64" }
@@ -488,8 +488,12 @@ else {
                 Write-Host "[ERROR] VULKAN_SDK not set." -ForegroundColor Red
                 Pop-Location; Read-Host "Press Enter to exit"; exit 1
             }
-            Invoke-Step "Building shaders" { make shaderBuild }
-            Invoke-Step "Building shaderEmbedder" { make shaderEmbedder }
+            Invoke-Step "Compiling shaderEmbedder" {
+                clang++ src/Vulkan/spvFileToCppHeader.cpp -std=c++17 -O2 -o shaderEmbedder.exe
+            }
+            Invoke-Step "Embedding shaders" {
+                .\shaderEmbedder.exe libvshipSpvShaders include/libvshipSpvShaders.hpp
+            }
             Invoke-Step "Compiling Vship (Vulkan)" {
                 clang++ -c src/VshipLib.cpp -DVULKANBUILD -DNDEBUG -std=c++17 -O2 -Wall `
                     -Wno-ignored-attributes -Wno-unused-variable -Wno-nullability-completeness `
