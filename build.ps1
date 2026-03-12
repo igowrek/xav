@@ -742,7 +742,7 @@ $sdkVersion = $null
 
 foreach ($root in $candidateRoots) {
     if ($root -and (Test-Path $root)) {
-        $foundVer = Get-ChildItem "$root\Lib" -ErrorAction SilentlyContinue | Where-Object { Test-Path "$($_.FullName)\um\x64" -and Test-Path "$($_.FullName)\ucrt\x64" } | Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty Name
+        $foundVer = Get-ChildItem "$root\Lib" -ErrorAction SilentlyContinue | Where-Object { (Test-Path "$($_.FullName)\um\x64") -and (Test-Path "$($_.FullName)\ucrt\x64") } | Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty Name
         if ($foundVer) {
             $sdkRoot = $root
             $sdkVersion = $foundVer
@@ -937,7 +937,6 @@ $rustflags = @(
     '-C', 'embed-bitcode=yes',
     '-Z', 'dylib-lto',
     '-Z', 'panic_abort_tests',
-    '-C', 'target-feature=+crt-static',
     '-C', 'link-arg=/OPT:REF',
     '-C', 'link-arg=/OPT:ICF'
 )
