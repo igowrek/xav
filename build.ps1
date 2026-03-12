@@ -441,10 +441,6 @@ else {
 
     switch ($vshipBackend) {
         'cuda' {
-            if (-not $env:CUDA_PATH) {
-                Write-Host "[ERROR] CUDA_PATH not set." -ForegroundColor Red
-                Pop-Location; Read-Host "Press Enter to exit"; exit 1
-            }
             if ($vsIncludeV143) {
                 # "Legacy" GPU: use MSVC v143 via ccbin
                 $msvcBin = Get-ChildItem "$vsPath\VC\Tools\MSVC" -Directory -ErrorAction SilentlyContinue |
@@ -471,10 +467,6 @@ else {
             }
         }
         'hip' {
-            if (-not $env:HIP_PATH) {
-                Write-Host "[ERROR] HIP_PATH not set." -ForegroundColor Red
-                Pop-Location; Read-Host "Press Enter to exit"; exit 1
-            }
             Invoke-Step "Compiling Vship (HIP)" {
                 & "$env:HIP_PATH\bin\hipcc" -c src/VshipLib.cpp -std=c++17 -I include `
                     --offload-arch=native `
@@ -484,10 +476,6 @@ else {
             Invoke-Step "Archiving Vship (HIP)" { llvm-ar rcs libvship.lib libvship.o }
         }
         'vulkan' {
-            if (-not $env:VULKAN_SDK) {
-                Write-Host "[ERROR] VULKAN_SDK not set." -ForegroundColor Red
-                Pop-Location; Read-Host "Press Enter to exit"; exit 1
-            }
             Invoke-Step "Compiling shaderEmbedder" {
                 clang++ src/Vulkan/spvFileToCppHeader.cpp -std=c++17 -O2 -o shaderEmbedder.exe
             }
