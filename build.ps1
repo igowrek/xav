@@ -374,7 +374,7 @@ if ($vshipBackend -eq 'cuda' -and -not $env:CUDA_PATH) {
         Install-Cuda129
     }
     if (-not $env:CUDA_PATH) {
-        Write-Host "[ERROR] CUDA_PATH still not set after install. Try restarting your PC." -ForegroundColor Red
+        Write-Host "[ERROR] CUDA_PATH still not set after install. Try restarting your terminal, or set CUDA_PATH manually." -ForegroundColor Red
         Read-Host "Press Enter to exit"
         exit 1
     }
@@ -388,7 +388,7 @@ if ($vshipBackend -eq 'hip' -and -not $env:HIP_PATH) {
     Start-Process -FilePath $hipInstaller -ArgumentList '-install' -Wait
     Update-SessionEnvironment
     if (-not $env:HIP_PATH) {
-        Write-Host "[ERROR] HIP_PATH still not set after install. Try restarting your PC." -ForegroundColor Red
+        Write-Host "[ERROR] HIP_PATH still not set after install. Try restarting your terminal, or set HIP_PATH manually." -ForegroundColor Red
         Read-Host "Press Enter to exit"
         exit 1
     }
@@ -398,7 +398,7 @@ if ($vshipBackend -eq 'hip' -and -not $env:HIP_PATH) {
 if (-not $env:VULKAN_SDK) {
     Confirm-Install "Vulkan SDK" "KhronosGroup.VulkanSDK"
     if (-not $env:VULKAN_SDK) {
-        Write-Host "[ERROR] VULKAN_SDK not found. If you have it installed, please set VULKAN_SDK manually, or try restarting your terminal." -ForegroundColor Red
+        Write-Host "[ERROR] VULKAN_SDK not found. Try restarting your terminal, or set VULKAN_SDK manually." -ForegroundColor Red
         Read-Host "Press Enter to exit"
         exit 1
     }
