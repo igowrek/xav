@@ -400,7 +400,7 @@ fn get_args(args: &[String], allow_resume: bool) -> Result<Args, Xerr> {
 
     let mut result = parse_args_loop(args)?;
 
-    if allow_resume && let Ok(saved_args) = get_saved_args(&result.input, &result.temp_dir, &result.worker) {
+    if allow_resume && let Ok(saved_args) = get_saved_args(&result) {
         return Ok(saved_args);
     }
     if result.output != PathBuf::new() {
@@ -459,18 +459,19 @@ fn save_args(work_dir: &Path) -> Result<(), Xerr> {
     Ok(())
 }
 
-fn get_saved_args(input: &Path, temp_dir: &Path, worker: &usize) -> Result<Args, Xerr> {
-    let canonical = input.canonicalize()?;
+fn get_saved_args(args: &Args) -> Result<Args, Xerr> {
+    let canonical = args.input.canonicalize()?;
     let hash = hash_input(&canonical);
-    let work_dir = temp_dir.join(format!(".{}", &hash[..7]));
+    let work_dir = args.temp_dir.join(format!(".{}", &hash[..7]));
     let cmd_path = work_dir.join("cmd.txt");
 
     if cmd_path.exists() && get_resume(&work_dir).is_some_and(|r| !r.chnks_done.is_empty()) {
         let cmd_line = read_to_string(cmd_path)?;
         let saved_args = parse_quoted_args(&cmd_line);
         let mut parsed = get_args(&saved_args, false)?;
-        if *worker > 1 {
-            parsed.worker = *worker;
+        if args.worker > 1 {
+            parsed.worker = args.worker;
+            parsed.chunk_buffer = args.chunk_buffer;
         }
         Ok(parsed)
     } else {
