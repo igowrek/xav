@@ -394,6 +394,18 @@ fn check_param(name: &str, key: &str, val: &str) -> Result<(), Xerr> {
         | "mastering-display"
         | "content-light" => {}
 
+        "noise" => {
+            chk_range(key, name, val, 0, 100)?;
+        }
+
+        "noise-chroma" => {
+            chk_range(key, name, val, -2, 100)?;
+        }
+
+        "noise-size" => {
+            chk_range(key, name, val, -1, 15) ?;
+        }
+
         _ => {
             return Err(err(key, format_args!("{Y}unknown or wrong parameter")));
         }
