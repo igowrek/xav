@@ -65,7 +65,24 @@ pub struct AudioStream {
     pub index: u8,
     pub channels: u8,
     pub lang: Option<String>,
+    pub layout: String,
 }
+
+const FF_FLAGS: [&str; 13] = [
+    "-fflags",
+    "+genpts+igndts+discardcorrupt+bitexact",
+    "-bitexact",
+    "-avoid_negative_ts",
+    "make_zero",
+    "-err_detect",
+    "ignore_err",
+    "-ignore_unknown",
+    "-reset_timestamps",
+    "1",
+    "-start_at_zero",
+    "-output_ts_offset",
+    "0",
+];
 
 fn parse_norm(s: &str) -> Result<NormParams, Xerr> {
     if s == "norm" {
@@ -182,15 +199,23 @@ pub fn lang_name(code: &str) -> &str {
 }
 
 fn get_streams(input: &Path) -> Result<Vec<AudioStream>, Xerr> {
-    get_audio_streams(input).map(|v| {
-        v.into_iter()
-            .map(|(index, channels, lang)| AudioStream {
-                index,
-                channels,
-                lang,
-            })
-            .collect()
-    })
+    let mut streams = Vec::new();
+    for (index, channels, lang) in get_audio_streams(input)? {
+        let dec = AudioDecoder::new(input, index as i32)?;
+        let layout = dec.layout_str().to_string();
+        let channels = if channels == 6 && layout.contains("5.1(side)") {
+            8
+        } else {
+            channels
+        };
+        streams.push(AudioStream {
+            index,
+            channels,
+            lang,
+            layout,
+        });
+    }
+    Ok(streams)
 }
 
 pub fn frame_to_sample(frame: usize, fps_num: u32, fps_den: u32, rate: u32) -> i64 {
@@ -249,25 +274,28 @@ fn encode_direct(
 ) -> Result<(), Xerr> {
     let mut dec = AudioDecoder::new(input, i32::from(stream.index))?;
     let ch = usize::from(dec.channels());
+    let is_5_1_side = ch == 6 && dec.layout_str().contains("5.1(side)");
+    let effective_ch = if is_5_1_side { 8 } else { ch };
     let total: i64 = sample_ranges.map_or_else(
         || dec.total_samples(),
         |r| r.iter().map(|&(s, e)| e - s).sum(),
     );
-    let family = if ch <= 2 {
+    let family = if effective_ch <= 2 {
         FAMILY_MONO_STEREO
     } else {
         FAMILY_SURROUND
     };
-    let mut enc = Encoder::new(output, ch as u8, bitrate, family)?;
+    let mut enc = Encoder::new(output, effective_ch as u8, bitrate, family)?;
     let mut progs = ProgsBar::new();
     let mut encoded: i64 = 0;
     let tid = stream.index;
-    let needs_reorder = ch > 2;
+    let needs_reorder = effective_ch > 2 && !is_5_1_side;
     let mut pos: i64 = 0;
     let mut ri: usize = 0;
 
     dec.decode_to(|chunk| {
         let n = (chunk.len() / ch) as i64;
+        let n_usize = chunk.len() / ch;
         if let Some(ranges) = sample_ranges {
             let chunk_end = pos + n;
             while ri < ranges.len() && ranges[ri].0 < chunk_end {
@@ -275,12 +303,26 @@ fn encode_direct(
                 let start = (rs - pos).max(0) as usize;
                 let end = ((re - pos).min(n)) as usize;
                 if start < end {
-                    let sl = &mut chunk[start * ch..end * ch];
+                    let cnt = end - start;
+                    let sl_orig = &chunk[start * ch..end * ch];
+                    let mut sl_proc = if is_5_1_side {
+                        let mut new_sl = vec![0.0f32; cnt * 8];
+                        for i in 0..cnt {
+                            new_sl[i*8] = sl_orig[i*6];
+                            new_sl[i*8+1] = sl_orig[i*6+2];
+                            new_sl[i*8+2] = sl_orig[i*6+1];
+                            new_sl[i*8+3..i*8+5].copy_from_slice(&sl_orig[i*6+4..i*6+6]);
+                            new_sl[i*8+7] = sl_orig[i*6+3];
+                        }
+                        new_sl
+                    } else {
+                        sl_orig.to_vec()
+                    };
                     if needs_reorder {
-                        reorder_surround(sl, ch, end - start);
+                        reorder_surround(&mut sl_proc, effective_ch, cnt);
                     }
-                    enc.write_float(sl, ch)?;
-                    encoded += (end - start) as i64;
+                    enc.write_float(&sl_proc, effective_ch)?;
+                    encoded += cnt as i64;
                 }
                 if re <= chunk_end {
                     ri += 1;
@@ -292,10 +334,23 @@ fn encode_direct(
                 }
             }
         } else {
+            let mut processed_chunk = if is_5_1_side {
+                let mut new_chunk = vec![0.0f32; n_usize * 8];
+                for i in 0..n_usize {
+                    new_chunk[i*8] = chunk[i*6];
+                    new_chunk[i*8+1] = chunk[i*6+2];
+                    new_chunk[i*8+2] = chunk[i*6+1];
+                    new_chunk[i*8+3..i*8+5].copy_from_slice(&chunk[i*6+4..i*6+6]);
+                    new_chunk[i*8+7] = chunk[i*6+3];
+                }
+                new_chunk
+            } else {
+                chunk.to_vec()
+            };
             if needs_reorder {
-                reorder_surround(chunk, ch, n as usize);
+                reorder_surround(&mut processed_chunk, effective_ch, n_usize);
             }
-            enc.write_float(chunk, ch)?;
+            enc.write_float(&processed_chunk, effective_ch)?;
             encoded += n;
         }
         pos += n;
@@ -520,7 +575,12 @@ pub fn encode_audio_streams(
                         };
                         (128.0 * (cc / 2.0f32).powf(0.75)) as u16
                     }
-                    AudioBitrate::Fixed(b) => b,
+                    AudioBitrate::Fixed(mut b) => {
+                        if s.layout.contains("5.1(side)") {
+                            b = (b as f64 * (7.1 / 5.1f64).powf(0.75)) as u32;
+                        }
+                        b
+                    }
                 }
             };
             TrackJob {
