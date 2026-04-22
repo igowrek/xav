@@ -1,6 +1,7 @@
 use std::{
     collections::hash_map::DefaultHasher,
     env::args as env_args,
+    env::current_dir as current_dir,
     fs::{
         create_dir_all, metadata, read_to_string, remove_dir_all, remove_file, write as write_to,
     },
@@ -96,6 +97,7 @@ pub struct Args {
     pub probe_params: Option<String>,
     pub sc_only: bool,
     pub hwaccel: bool,
+    pub temp_dir: PathBuf,
 }
 
 extern "C" fn restore() {
@@ -129,6 +131,7 @@ fn print_help() {
     }
     println!("   {P}┃ {C}--hwaccel    {W}Use Vulkan hw decoding (perf depends on the input video and hardware)");
     println!("   {P}┃ {C}--sc-only    {W}Exit after SCD");
+    println!("   {P}| {C}--temp-dir   {W}Set directory for temporary files");
 
     println!();
     println!("{P}Example:{W}");
@@ -262,7 +265,7 @@ macro_rules! arg {
 
 fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
     let (mut worker, mut chunk_buffer, mut sc_only, mut hwaccel) = (1usize, None, false, false);
-    let (mut scene_file, mut input, mut output) = (PathBuf::new(), PathBuf::new(), PathBuf::new());
+    let (mut scene_file, mut input, mut output, mut temp_dir) = (PathBuf::new(), PathBuf::new(), PathBuf::new(), current_dir().unwrap());
     let (mut encoder, mut params) = (Encoder::default(), String::new());
     let (mut audio, mut ranges) = (None, None);
     #[cfg(feature = "vship")]
@@ -312,6 +315,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
             "-P" | "--probe-param" => arg!(opt args, i, probe_params),
             "--hwaccel" => hwaccel = true,
             "--sc-only" => sc_only = true,
+            "--temp-dir" => arg!(path args, i, temp_dir),
             "-h" | "--help" => {
                 print_help();
                 return Err(Help);
@@ -341,6 +345,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
         ranges,
         sc_only,
         hwaccel,
+        temp_dir,
         #[cfg(feature = "vship")]
         target_quality,
         #[cfg(feature = "vship")]
@@ -363,7 +368,7 @@ fn get_args(args: &[String], allow_resume: bool) -> Result<Args, Xerr> {
 
     let mut result = parse_args_loop(args)?;
 
-    if allow_resume && let Ok(saved_args) = get_saved_args(&result.input) {
+    if allow_resume && let Ok(saved_args) = get_saved_args(&result) {
         return Ok(saved_args);
     }
     if result.output != PathBuf::new() {
@@ -426,16 +431,21 @@ fn save_args(work_dir: &Path) -> Result<(), Xerr> {
     Ok(())
 }
 
-fn get_saved_args(input: &Path) -> Result<Args, Xerr> {
-    let canonical = input.canonicalize()?;
+fn get_saved_args(args: &Args) -> Result<Args, Xerr> {
+    let canonical = args.input.canonicalize()?;
     let hash = hash_input(&canonical);
-    let work_dir = canonical.with_file_name(format!(".{}", &hash[..7]));
+    let work_dir = args.temp_dir.join(format!(".{}", &hash[..7]));
     let cmd_path = work_dir.join("cmd.txt");
 
     if cmd_path.exists() && get_resume(&work_dir).is_some_and(|r| !r.chnks_done.is_empty()) {
         let cmd_line = read_to_string(cmd_path)?;
         let saved_args = parse_quoted_args(&cmd_line);
-        get_args(&saved_args, false)
+        let mut parsed = get_args(&saved_args, false)?;
+        if args.worker > 1 {
+            parsed.worker = args.worker;
+            parsed.chunk_buffer = args.chunk_buffer;
+        }
+        Ok(parsed)
     } else {
         Err("No tmp dir found".into())
     }
@@ -614,7 +624,7 @@ fn main_with_args(args: &Args) -> Result<(), Xerr> {
 
     let canonical_input = args.input.canonicalize()?;
     let hash = hash_input(&canonical_input);
-    let work_dir = canonical_input.with_file_name(format!(".{}", &hash[..7]));
+    let work_dir = args.temp_dir.join(format!(".{}", &hash[..7]));
 
     create_dir_all(&work_dir)?;
 
