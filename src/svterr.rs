@@ -362,7 +362,8 @@ fn check_param(name: &str, key: &str, val: &str) -> Result<(), Xerr> {
             chk_range(key, name, val, -1, 200)?;
         }
 
-        "noise-size" => {
+        "noise-size"
+        | "film-grain-int" => {
             chk_range(key, name, val, -1, 13)?;
         }
 

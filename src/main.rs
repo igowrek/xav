@@ -96,6 +96,7 @@ pub struct Args {
     #[cfg(feature = "vship")]
     pub probe_params: Option<String>,
     pub sc_only: bool,
+    pub sc_group: bool,
     pub hwaccel: bool,
     pub temp_dir: PathBuf,
 }
@@ -131,6 +132,7 @@ fn print_help() {
     }
     println!("   {P}┃ {C}--hwaccel    {W}Use Vulkan hw decoding (perf depends on the input video and hardware)");
     println!("   {P}┃ {C}--sc-only    {W}Exit after SCD");
+    println!("   {P}┃ {C}--sc-group   {W}Generate a grouped SCD file");
     println!("   {P}| {C}--temp-dir   {W}Set directory for temporary files");
 
     println!();
@@ -264,7 +266,7 @@ macro_rules! arg {
 }
 
 fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
-    let (mut worker, mut chunk_buffer, mut sc_only, mut hwaccel) = (1usize, None, false, false);
+    let (mut worker, mut chunk_buffer, mut sc_only, mut sc_group, mut hwaccel) = (1usize, None, false, false, false);
     let (mut scene_file, mut input, mut output, mut temp_dir) = (PathBuf::new(), PathBuf::new(), PathBuf::new(), current_dir().unwrap());
     let (mut encoder, mut params) = (Encoder::default(), String::new());
     let (mut audio, mut ranges) = (None, None);
@@ -315,6 +317,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
             "-P" | "--probe-param" => arg!(opt args, i, probe_params),
             "--hwaccel" => hwaccel = true,
             "--sc-only" => sc_only = true,
+            "--sc-group" => sc_group = true,
             "--temp-dir" => arg!(path args, i, temp_dir),
             "-h" | "--help" => {
                 print_help();
@@ -344,6 +347,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
         chunk_buffer: worker + chunk_buffer.unwrap_or(0),
         ranges,
         sc_only,
+        sc_group,
         hwaccel,
         temp_dir,
         #[cfg(feature = "vship")]
@@ -478,7 +482,7 @@ fn parse_quoted_args(cmd_line: &str) -> Vec<String> {
 
 fn ensure_scene_file(args: &Args, inf: &VidInf, crop: (u32, u32), line: usize) -> Result<(), Xerr> {
     if !args.scene_file.exists() {
-        fd_scenes(&args.input, &args.scene_file, inf, crop, line, args.hwaccel)?;
+        fd_scenes(&args.input, &args.scene_file, args.sc_group, inf, crop, line, args.hwaccel)?;
     }
     Ok(())
 }
@@ -594,7 +598,7 @@ fn scd_and_audio(
     audio_handle: Option<AudioHandle>,
 ) -> Result<Option<AudioResult>, Xerr> {
     if let Some(handle) = audio_handle {
-        fd_scenes(&args.input, &args.scene_file, inf, crop, 1, args.hwaccel)?;
+        fd_scenes(&args.input, &args.scene_file, args.sc_group, inf, crop, 1, args.hwaccel)?;
         let result = handle
             .join()
             .map_err(|_e| Msg("Audio encoding thread panicked".into()))?;

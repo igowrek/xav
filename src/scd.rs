@@ -65,6 +65,7 @@ fn build_luma_frame<T: Pixel>(
 pub fn fd_scenes(
     vid_path: &Path,
     scene_file: &Path,
+    sc_group: bool,
     inf: &VidInf,
     crop: (u32, u32),
     line: usize,
@@ -135,8 +136,26 @@ pub fn fd_scenes(
     let new_scenes = refine_scenes(&results.scene_changes, tot_frames, max_dist, &scores);
 
     let mut content = String::new();
-    for &scene_frame in &new_scenes {
-        _ = writeln!(content, "{scene_frame}");
+    if sc_group {
+        let mut current_slice = new_scenes.clone();
+        for i in 0..results.scene_changes.len() {
+            let end_index = if i + 1 < results.scene_changes.len() {
+                let next_val = results.scene_changes[i + 1];
+                current_slice.partition_point(|&x| x < next_val)
+            } else {
+                current_slice.len()
+            };
+            let (group, remainder) = current_slice.split_at(end_index);
+            for &scene_frame in group {
+                _ = write!(content, "{scene_frame} ");
+            }
+            _ = writeln!(content);
+            current_slice = remainder.to_vec();
+        }
+    } else {
+        for &scene_frame in &new_scenes {
+            _ = writeln!(content, "{scene_frame}");
+        }
     }
 
     fs_write(scene_file, content)?;
