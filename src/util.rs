@@ -1,8 +1,8 @@
 #[cfg(not(debug_assertions))]
 use std::hint::unreachable_unchecked;
 
-pub const G: &str = "\x1b[1;92m";
 pub const R: &str = "\x1b[1;91m";
+pub const G: &str = "\x1b[1;92m";
 pub const B: &str = "\x1b[1;94m";
 pub const P: &str = "\x1b[1;95m";
 pub const Y: &str = "\x1b[1;93m";

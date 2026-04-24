@@ -27,8 +27,8 @@ const READ_CAP: usize = 8192;
 
 use crate::util::{B, C, G, N, P, R, W, Y, assume_unreachable};
 
-const G_HASH: &str = "\x1b[1;92m#";
 const R_DASH: &str = "\x1b[1;91m-";
+const G_HASH: &str = "\x1b[1;92m#";
 const B_HASH: &str = "\x1b[1;94m#";
 const Y_DASH: &str = "\x1b[1;93m-";
 
