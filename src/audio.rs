@@ -14,7 +14,7 @@ use crate::{
         Xerr,
         Xerr::{Done, Msg},
     },
-    ffms::get_audio_streams,
+    ffms::{get_audio_streams, detect_text_based_subtitles},
     lavf::AudioDecoder,
     opus::{Encoder, FAMILY_MONO_STEREO, FAMILY_SURROUND},
     progs::ProgsBar,
