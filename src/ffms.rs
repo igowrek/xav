@@ -54,6 +54,10 @@ const AV_FRAME_DATA_MASTERING_DISPLAY_METADATA: c_int = 11;
 const AV_FRAME_DATA_CONTENT_LIGHT_LEVEL: c_int = 14;
 const AV_PIX_FMT_YUV420P10LE: c_int = 62;
 const AV_HWDEVICE_TYPE_VULKAN: c_int = 11;
+// Video codec IDs
+const AV_CODEC_ID_H264: c_int = 27;
+const AV_CODEC_ID_HEVC: c_int = 173;
+const AV_CODEC_ID_VP9: c_int = 167;
 const AV_CODEC_ID_AV1: c_int = 225;
 const AV_CODEC_ID_HDMV_PGS_SUBTITLE: c_int = 94214;
 const AV_CODEC_ID_DVB_SUBTITLE: c_int = 94209;
@@ -342,6 +346,7 @@ unsafe extern "C" {
     fn av_hwframe_transfer_data(dst: *mut VidFrame, src: *const VidFrame, flags: c_int) -> c_int;
     fn av_buffer_ref(buf: *mut c_void) -> *mut c_void;
     fn av_buffer_unref(buf: *mut *mut c_void);
+    fn avcodec_find_decoder(id: c_int) -> *const c_void;
     fn avcodec_find_decoder_by_name(name: *const c_char) -> *const c_void;
 }
 
@@ -448,6 +453,7 @@ pub struct VidInf {
     pub mastering_display: Option<String>,
     pub content_light: Option<String>,
     pub y_linesize: usize,
+    pub codec_id: c_int,
 }
 
 pub struct VideoDecoder {
@@ -912,6 +918,10 @@ pub fn get_vidinf(path: &Path) -> Result<VidInf, Xerr> {
         });
 
         let fmeta = decode_first_frame(fmt_ctx, dec, par, idx);
+
+        // Extract codec_id from codecpar
+        let codec_id = *(par as *const AVCodecParameters as *const i32).add(1);
+
         avformat_close_input(addr_of_mut!(fmt_ctx));
 
         Ok(VidInf {
@@ -930,6 +940,7 @@ pub fn get_vidinf(path: &Path) -> Result<VidInf, Xerr> {
             mastering_display: fmeta.mastering_display,
             content_light: fmeta.content_light,
             y_linesize: fmeta.y_linesize,
+            codec_id,
         })
     }
 }
@@ -2367,5 +2378,156 @@ pub fn detect_text_based_subtitles(path: &Path) -> Result<Vec<usize>, Xerr> {
 
         avformat_close_input(&raw mut fmt_ctx);
         Ok(text_subs)
+    }
+}
+
+/// Validates GPU hardware support by attempting actual GPU decoding of the input file
+/// Returns Ok(()) if GPU supports the codec/bit depth combination, Err otherwise
+pub fn validate_gpu_codec_support(input: &Path, inf: &VidInf) -> Result<(), Xerr> {
+    let codec_name = match inf.codec_id {
+        AV_CODEC_ID_H264 => "H.264 (AVC)",
+        AV_CODEC_ID_HEVC => "H.265 (HEVC)",
+        AV_CODEC_ID_VP9 => "VP9",
+        AV_CODEC_ID_AV1 => "AV1",
+        _ => "Unknown codec",
+    };
+
+    let bit_depth_str = if inf.is_10b { "10-bit" } else { "8-bit" };
+
+    unsafe {
+        av_log_set_level(AV_LOG_ERROR);
+
+        // Create GPU device context
+        let mut hw_device_ctx: *mut c_void = null_mut();
+        if av_hwdevice_ctx_create(
+            addr_of_mut!(hw_device_ctx),
+            AV_HWDEVICE_TYPE_VULKAN,
+            null(),
+            null_mut(),
+            0,
+        ) < 0
+        {
+            return Err("GPU codec validation: Failed to create GPU device context. GPU acceleration may not be available.".into());
+        }
+
+        // Open input file to get proper codec parameters
+        let cpath = CString::new(input.to_str().ok_or("invalid path")?)?;
+        let mut fmt_ctx: *mut AVFormatContext = null_mut();
+        if avformat_open_input(addr_of_mut!(fmt_ctx), cpath.as_ptr(), null(), null_mut()) < 0 {
+            av_buffer_unref(addr_of_mut!(hw_device_ctx));
+            return Err("GPU codec validation: Failed to open input file".into());
+        }
+
+        probe_streams(fmt_ctx, AVMEDIA_TYPE_VIDEO, 0x8000);
+
+        // Find video stream
+        let mut dec_ptr: *const c_void = null();
+        let idx = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, addr_of_mut!(dec_ptr), 0);
+        if idx < 0 {
+            avformat_close_input(addr_of_mut!(fmt_ctx));
+            av_buffer_unref(addr_of_mut!(hw_device_ctx));
+            return Err("GPU codec validation: No video stream found".into());
+        }
+
+        let stream = &*(*(*fmt_ctx).streams.add(idx as usize));
+        let par = &*stream.codecpar;
+
+        // Get decoder (prefer native av1 decoder for AV1)
+        let mut dec = avcodec_find_decoder(par.codec_id);
+        if par.codec_id == AV_CODEC_ID_AV1 {
+            let native = avcodec_find_decoder_by_name(c"av1".as_ptr());
+            if !native.is_null() {
+                dec = native;
+            }
+        }
+        if dec.is_null() {
+            avformat_close_input(addr_of_mut!(fmt_ctx));
+            av_buffer_unref(addr_of_mut!(hw_device_ctx));
+            return Err(format!(
+                "GPU codec validation: Decoder not found for {} {}",
+                codec_name, bit_depth_str
+            )
+            .into());
+        }
+
+        // Create codec context and test if GPU can open it
+        let mut codec_ctx = avcodec_alloc_context3(dec);
+        if codec_ctx.is_null() {
+            avformat_close_input(addr_of_mut!(fmt_ctx));
+            av_buffer_unref(addr_of_mut!(hw_device_ctx));
+            return Err("GPU codec validation: Failed to allocate codec context".into());
+        }
+
+        // Configure codec context from stream parameters
+        avcodec_parameters_to_context(codec_ctx, par);
+        set_thread_count(codec_ctx, 1);
+
+        // Set GPU hardware device context
+        set_hw_device_ctx(codec_ctx, av_buffer_ref(hw_device_ctx));
+
+        // Try to open decoder with GPU
+        if avcodec_open2(codec_ctx, dec, null_mut()) < 0 {
+            avcodec_free_context(addr_of_mut!(codec_ctx));
+            avformat_close_input(addr_of_mut!(fmt_ctx));
+            av_buffer_unref(addr_of_mut!(hw_device_ctx));
+            return Err(format!(
+                "GPU does not support {} {} decoding. Try encoding without --hwaccel.",
+                codec_name, bit_depth_str
+            )
+            .into());
+        }
+
+        // Try to decode the first frame with GPU to validate support
+        let mut pkt = av_packet_alloc();
+        let mut frame = av_frame_alloc();
+        let mut sw_frame = av_frame_alloc();
+        let mut gpu_supported = false;
+
+        loop {
+            let read_result = av_read_frame(fmt_ctx, pkt);
+            if read_result < 0 {
+                break;
+            }
+
+            if (*pkt).stream_index != idx {
+                av_packet_unref(pkt);
+                continue;
+            }
+
+            // Send packet to decoder
+            avcodec_send_packet(codec_ctx, pkt);
+            av_packet_unref(pkt);
+
+            // Try to receive decoded frame
+            if avcodec_receive_frame(codec_ctx, frame) == 0 {
+                // Frame received - now try to transfer from GPU to CPU memory (real test)
+                if av_hwframe_transfer_data(sw_frame, frame, 0) == 0 {
+                    // Successfully transferred GPU frame to CPU - GPU is supported!
+                    gpu_supported = true;
+                } else {
+                    // Transfer failed - GPU format not really supported
+                    gpu_supported = false;
+                }
+                break;
+            }
+        }
+
+        // Cleanup
+        av_frame_free(addr_of_mut!(sw_frame));
+        av_frame_free(addr_of_mut!(frame));
+        av_packet_free(addr_of_mut!(pkt));
+        avcodec_free_context(addr_of_mut!(codec_ctx));
+        avformat_close_input(addr_of_mut!(fmt_ctx));
+        av_buffer_unref(addr_of_mut!(hw_device_ctx));
+
+        if gpu_supported {
+            Ok(())
+        } else {
+            Err(format!(
+                "GPU (Vulkan) does not support {} {} decoding. Try encoding without --hwaccel.",
+                codec_name, bit_depth_str
+            )
+            .into())
+        }
     }
 }

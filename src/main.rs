@@ -61,7 +61,7 @@ use crop::{CropDetectConfig, detect_crop};
 use encode::encode_all;
 use encoder::Encoder;
 use error::{IN_ALT_SCREEN, Xerr, eprint, fatal, restore_screen};
-use ffms::{DecodeStrat, VidInf, VideoDecoder, gcd, get_decode_strat, get_vidinf};
+use ffms::{DecodeStrat, VidInf, VideoDecoder, gcd, get_decode_strat, get_vidinf, validate_gpu_codec_support};
 use scd::fd_scenes;
 use y4m::{PipeReader, init_pipe};
 
@@ -641,6 +641,15 @@ fn main_with_args(args: &Args) -> Result<(), Xerr> {
     }
 
     let inf = get_vidinf(&args.input)?;
+    
+    if args.hwaccel {
+        // Validate GPU codec support before attempting hardware decoding
+        validate_gpu_codec_support(&canonical_input, &inf)?;
+    }
+
+    if get_resume(&work_dir).is_none_or(|r| r.chnks_done.is_empty()) {
+        save_args(&work_dir)?;
+    }
 
     let audio_handle = spawn_audio(args, &work_dir, &inf);
 
