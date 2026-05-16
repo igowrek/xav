@@ -98,7 +98,7 @@ pub struct Args {
     pub sc_only: bool,
     pub sc_group: bool,
     pub hwaccel: bool,
-    pub temp_dir: PathBuf,
+    pub temp_dir: Option<PathBuf>,
 }
 
 extern "C" fn restore() {
@@ -263,13 +263,18 @@ macro_rules! arg {
             $v = PathBuf::from(v);
         }
     };
+    (opt_path $a:ident, $i:ident, $v:expr) => {
+        if let Some(v) = next_arg($a, &mut $i) {
+            $v = Some(PathBuf::from(v));
+        }
+    };
 }
 
 fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
     let (mut worker, mut chunk_buffer, mut sc_only, mut sc_group, mut hwaccel) = (1usize, None, false, false, false);
-    let (mut scene_file, mut input, mut output, mut temp_dir) = (PathBuf::new(), PathBuf::new(), PathBuf::new(), current_dir().unwrap());
+    let (mut scene_file, mut input, mut output) = (PathBuf::new(), PathBuf::new(), PathBuf::new());
     let (mut encoder, mut params) = (Encoder::default(), String::new());
-    let (mut audio, mut ranges) = (None, None);
+    let (mut audio, mut ranges, mut temp_dir) = (None, None, None);
     #[cfg(feature = "vship")]
     let (mut target_quality, mut qp_range, mut cvvdp_config, mut probe_params) = (
         None::<String>,
@@ -318,7 +323,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
             "--hwaccel" => hwaccel = true,
             "--sc-only" => sc_only = true,
             "--sc-group" => sc_group = true,
-            "--temp-dir" => arg!(path args, i, temp_dir),
+            "--temp-dir" => arg!(opt_path args, i, temp_dir),
             "-h" | "--help" => {
                 print_help();
                 return Err(Help);
@@ -438,7 +443,12 @@ fn save_args(work_dir: &Path) -> Result<(), Xerr> {
 fn get_saved_args(args: &Args) -> Result<Args, Xerr> {
     let canonical = args.input.canonicalize()?;
     let hash = hash_input(&canonical);
-    let work_dir = args.temp_dir.join(format!(".{}", &hash[..7]));
+    let work_dir = match &args.temp_dir {
+        Some(dir) => dir.clone(),
+        None => current_dir()
+            .map_err(|e| format!("Failed to get current directory: {}", e))?
+            .join(format!(".{}", &hash[..7])),
+    };
     let cmd_path = work_dir.join("cmd.txt");
 
     if cmd_path.exists() && get_resume(&work_dir).is_some_and(|r| !r.chnks_done.is_empty()) {
@@ -628,7 +638,12 @@ fn main_with_args(args: &Args) -> Result<(), Xerr> {
 
     let canonical_input = args.input.canonicalize()?;
     let hash = hash_input(&canonical_input);
-    let work_dir = args.temp_dir.join(format!(".{}", &hash[..7]));
+    let work_dir = match &args.temp_dir {
+        Some(dir) => dir.clone(),
+        None => current_dir()
+            .map_err(|e| format!("Failed to get current directory: {}", e))?
+            .join(format!(".{}", &hash[..7])),
+    };
 
     create_dir_all(&work_dir)?;
 
