@@ -121,8 +121,9 @@ impl ProgsBar {
         self.total = total;
         let elapsed = self.start.elapsed().as_secs() as usize;
         let fps = current / elapsed.max(1);
-        let remaining = total.saturating_sub(current);
-        let eta_secs = remaining * elapsed / current.max(1);
+        // let remaining = total.saturating_sub(current);
+        // let eta_secs = remaining * elapsed / current.max(1);
+        let eta_secs = total * elapsed / current.max(1);
         let filled = (BAR_WIDTH * current / total.max(1)).min(BAR_WIDTH);
         let perc = (current * 100 / total.max(1)).min(100);
 

@@ -343,11 +343,15 @@ fn check_param(name: &str, key: &str, val: &str) -> Result<(), Xerr> {
         }
 
         "sharpness" => {
-            chk_range(key, name, val, 0, 7)?;
+            chk_range(key, name, val, -7, 7)?;
         }
 
-        "film-grain" => {
+        "film-grain" | "film-grain-fade" => {
             chk_range(key, name, val, 0, 50)?;
+        }
+
+        "film-grain-int" => {
+            chk_range(key, name, val, 0, 10)?;
         }
 
         "mbr-overshoot-pct" | "luminance-qp-bias" => {
@@ -362,8 +366,7 @@ fn check_param(name: &str, key: &str, val: &str) -> Result<(), Xerr> {
             chk_range(key, name, val, -1, 200)?;
         }
 
-        "noise-size"
-        | "film-grain-int" => {
+        "noise-size" => {
             chk_range(key, name, val, -1, 13)?;
         }
 

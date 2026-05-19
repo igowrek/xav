@@ -1032,7 +1032,7 @@ Build-Opus
 Build-Libopusenc -MsysExe $msysExe
 Build-Vulkan -VsPath $vsPath
 Build-FFmpeg -VsPath $vsPath -MsysExe $msysExe
-Build-SvtAv1 -Variant $svtVariant -Dir $svtDir -Branch $svtBranch -Repo $svtRepo -ExtraCFlags $svtExtraCFlags -ArchFlags $svtArchFlags
+#Build-SvtAv1 -Variant $svtVariant -Dir $svtDir -Branch $svtBranch -Repo $svtRepo -ExtraCFlags $svtExtraCFlags -ArchFlags $svtArchFlags
 Build-Xav -Backend $vshipBackend -SvtChoice $svtChoice -enableTQ $enableTQ
 
 Write-Host "[SUCCESS] Build script finished." -ForegroundColor Green
