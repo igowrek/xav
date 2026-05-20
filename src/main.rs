@@ -64,7 +64,7 @@ mod vship;
 mod worker;
 mod y4m;
 
-use audio::{AudioSpec, AudioStream, encode_audio_streams, frame_to_sample, parse_audio_arg};
+use audio::{AudioSpec, AudioBitrate, AudioStream, encode_audio_streams, frame_to_sample, parse_audio_arg};
 use chunk::{
     Chunk, chunkify, get_resume, init_elapsed, load_scenes, merge_out, translate_scenes,
     validate_scenes,
@@ -89,7 +89,7 @@ pub struct Args {
     pub worker: usize,
     pub scene_file: PathBuf,
     pub params: String,
-    pub audio: Option<AudioSpec>,
+    pub audio: AudioSpec,
     pub input: PathBuf,
     pub output: PathBuf,
     pub decode_strat: Option<DecodeStrat>,
@@ -286,7 +286,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
     let (mut worker, mut chunk_buffer, mut sc_only, mut sc_group, mut hwaccel) = (1usize, None, false, false, false);
     let (mut scene_file, mut input, mut output) = (PathBuf::new(), PathBuf::new(), PathBuf::new());
     let (mut encoder, mut params) = (Encoder::default(), String::new());
-    let (mut audio, mut ranges, mut temp_dir) = (None, None, None);
+    let (mut audio, mut ranges, mut temp_dir) = (AudioSpec::default(), None, None);
     #[cfg(feature = "vship")]
     let (mut target_quality, mut qp_range, mut cvvdp_config, mut probe_params) = (
         None::<String>,
@@ -317,7 +317,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
             }
             "-a" | "--audio" => {
                 if let Some(v) = next_arg(args, &mut i) {
-                    audio = Some(parse_audio_arg(v)?);
+                    audio = parse_audio_arg(v)?;
                 }
             }
             #[cfg(feature = "vship")]
@@ -589,8 +589,10 @@ type AudioResult = Vec<(AudioStream, PathBuf)>;
 type AudioHandle = JoinHandle<Result<AudioResult, Xerr>>;
 
 fn spawn_audio(args: &Args, work_dir: &Path, inf: &VidInf) -> Option<AudioHandle> {
-    (!args.scene_file.exists() && args.audio.is_some() && args.encoder != Avm).then(|| {
-        let spec = unsafe { args.audio.as_ref().unwrap_unchecked() }.clone();
+    (!args.scene_file.exists()
+    && !matches!(args.audio.bitrate, AudioBitrate::Passthrough)
+    && args.encoder != Avm).then(|| {
+        let spec = args.audio.clone();
         let input = args.input.clone();
         let wd = work_dir.to_path_buf();
         let ranges = args.ranges.clone();
@@ -735,10 +737,11 @@ fn main_with_args(args: &Args) -> Result<(), Xerr> {
     encode_all(&chunks, &inf, &args, &args.input, &work_dir, pipe_reader);
     let enc_time = enc_start.elapsed() + Duration::from_secs(prior_secs);
 
-    let audio_tracks = if let Some(ref audio_spec) = args.audio
+    let audio_tracks = if let ref audio_spec = args.audio
+        && !matches!(audio_spec.bitrate, AudioBitrate::Passthrough)
         && args.encoder != Avm
     {
-        acquire_audio(audio_spec, audio_files, &args, &inf, &work_dir)?
+        acquire_audio(&audio_spec, audio_files, &args, &inf, &work_dir)?
     } else {
         Vec::new()
     };
@@ -751,6 +754,7 @@ fn main_with_args(args: &Args) -> Result<(), Xerr> {
         &audio_tracks,
         (args.encoder != Avm).then_some(args.input.as_path()),
         args.ranges.as_deref(),
+        &args.audio,
     )?;
 
     for t in &audio_tracks {

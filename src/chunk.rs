@@ -15,18 +15,11 @@ use std::{
 };
 
 use crate::{
-    audio::{AudioStream, lang_name},
-    encoder::{Encoder, Encoder::Avm},
+    audio::{AudioBitrate, AudioSpec, AudioStream, AudioStreams, lang_name},
+    encoder::Encoder::{self, Avm},
     error::Xerr,
     ffms::{
-        AV_NOPTS_VALUE, AVChapter, AVCodecParameters, AVFMT_FLAG_BITEXACT, AVFormatContext,
-        AVIO_FLAG_WRITE, AVMEDIA_TYPE_AUDIO, AVMEDIA_TYPE_SUBTITLE, AVMEDIA_TYPE_VIDEO, AVPacket,
-        AVRational, AVStream, VidInf, av_dict_copy, av_dict_free, av_dict_set, av_find_best_stream,
-        av_interleaved_write_frame, av_mallocz, av_packet_alloc, av_packet_free,
-        av_packet_rescale_ts, av_packet_unref, av_read_frame, av_write_trailer,
-        avcodec_parameters_copy, avformat_alloc_output_context2, avformat_close_input,
-        avformat_find_stream_info, avformat_free_context, avformat_new_stream, avformat_open_input,
-        avformat_query_codec, avformat_write_header, avio_closep, avio_open, gcd,
+        AV_CODEC_ID_DVB_SUBTITLE, AV_CODEC_ID_DVB_TELETEXT, AV_CODEC_ID_HDMV_PGS_SUBTITLE, AV_CODEC_ID_XSUB, AV_NOPTS_VALUE, AVChapter, AVCodecParameters, AVFMT_FLAG_BITEXACT, AVFormatContext, AVIO_FLAG_WRITE, AVMEDIA_TYPE_AUDIO, AVMEDIA_TYPE_SUBTITLE, AVMEDIA_TYPE_VIDEO, AVPacket, AVRational, AVStream, VidInf, av_dict_copy, av_dict_free, av_dict_set, av_find_best_stream, av_interleaved_write_frame, av_mallocz, av_packet_alloc, av_packet_free, av_packet_rescale_ts, av_packet_unref, av_read_frame, av_write_trailer, avcodec_parameters_copy, avformat_alloc_output_context2, avformat_close_input, avformat_find_stream_info, avformat_free_context, avformat_new_stream, avformat_open_input, avformat_query_codec, avformat_write_header, avio_closep, avio_open, gcd
     },
 };
 
@@ -343,7 +336,8 @@ fn add_src_streams(
     octx: *mut AVFormatContext,
     oformat: *const c_void,
     src_ctx: *mut AVFormatContext,
-    passthrough_audio: bool,
+    passthrough: bool,
+    audio_spec: &AudioSpec,
 ) -> Vec<(c_int, c_int)> {
     let mut maps = Vec::new();
     if src_ctx.is_null() {
@@ -355,7 +349,20 @@ fn add_src_streams(
             let par = (*ist).codecpar;
             let kind = (*par).codec_type;
             let want =
-                (kind == AVMEDIA_TYPE_AUDIO && passthrough_audio) || kind == AVMEDIA_TYPE_SUBTITLE;
+                (kind == AVMEDIA_TYPE_AUDIO
+                    && passthrough
+                    && match &audio_spec.streams {
+                        AudioStreams::All => true,
+                        AudioStreams::Specific(list) => list.contains(&(i as u8))
+                    }
+                )
+                || (kind == AVMEDIA_TYPE_SUBTITLE && !matches!(
+                    (*par).codec_id,
+                    AV_CODEC_ID_HDMV_PGS_SUBTITLE
+                    | AV_CODEC_ID_DVB_SUBTITLE
+                    | AV_CODEC_ID_XSUB
+                    | AV_CODEC_ID_DVB_TELETEXT
+                ));
             if want
                 && avformat_query_codec(oformat, (*par).codec_id, 0) != 0
                 && let Some(oi) = add_stream(octx, par)
@@ -656,6 +663,7 @@ fn remux(
     ranges: Option<&[(usize, usize)]>,
     out: &Path,
     inf: &VidInf,
+    audio_spec: &AudioSpec,
 ) -> Result<(), Xerr> {
     let first = chunks.first().ok_or("no encoded chunks to mux")?;
     let out_c = CString::new(out.to_str().ok_or("invalid output path")?)?;
@@ -679,7 +687,13 @@ fn remux(
     let src_ctx = src.map_or(null_mut(), |s| open_in(s).unwrap_or(null_mut()));
 
     let opus = add_opus(octx, audio);
-    let src_maps = add_src_streams(octx, oformat, src_ctx, audio.is_empty() && ranges.is_none());
+    let src_maps = add_src_streams(
+        octx,
+        oformat,
+        src_ctx,
+        matches!(audio_spec.bitrate, AudioBitrate::Passthrough) && ranges.is_none(),
+        audio_spec,
+    );
     if ranges.is_none() && !src_ctx.is_null() {
         copy_chapters(octx, src_ctx);
     }
@@ -750,6 +764,7 @@ pub fn merge_out(
     audio: &[(AudioStream, PathBuf)],
     src: Option<&Path>,
     ranges: Option<&[(usize, usize)]>,
+    audio_spec: &AudioSpec,
 ) -> Result<(), Xerr> {
     let mut files: Vec<_> = read_dir(encode_dir)?
         .filter_map(Result::ok)
@@ -774,7 +789,7 @@ pub fn merge_out(
         return concat_ivf(&paths, output, inf.frames as u32);
     }
 
-    remux(&paths, audio, src, ranges, output, inf)
+    remux(&paths, audio, src, ranges, output, inf, audio_spec)
 }
 
 pub fn translate_scenes(scenes: &[Scene], ranges: &[(usize, usize)]) -> Vec<Scene> {

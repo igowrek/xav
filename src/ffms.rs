@@ -55,14 +55,14 @@ const AV_FRAME_DATA_CONTENT_LIGHT_LEVEL: c_int = 14;
 const AV_PIX_FMT_YUV420P10LE: c_int = 62;
 const AV_HWDEVICE_TYPE_VULKAN: c_int = 11;
 // Video codec IDs
-const AV_CODEC_ID_H264: c_int = 27;
-const AV_CODEC_ID_HEVC: c_int = 173;
-const AV_CODEC_ID_VP9: c_int = 167;
-const AV_CODEC_ID_AV1: c_int = 225;
-const AV_CODEC_ID_HDMV_PGS_SUBTITLE: c_int = 94214;
-const AV_CODEC_ID_DVB_SUBTITLE: c_int = 94209;
-const AV_CODEC_ID_XSUB: c_int = 94211;
-const AV_CODEC_ID_DVB_TELETEXT: c_int = 94215;
+pub const AV_CODEC_ID_H264: c_int = 27;
+pub const AV_CODEC_ID_HEVC: c_int = 173;
+pub const AV_CODEC_ID_VP9: c_int = 167;
+pub const AV_CODEC_ID_AV1: c_int = 225;
+pub const AV_CODEC_ID_HDMV_PGS_SUBTITLE: c_int = 94214;
+pub const AV_CODEC_ID_DVB_SUBTITLE: c_int = 94209;
+pub const AV_CODEC_ID_XSUB: c_int = 94211;
+pub const AV_CODEC_ID_DVB_TELETEXT: c_int = 94215;
 const HW_DEVICE_CTX_OFFSET: usize = 560;
 
 #[repr(C)]
@@ -2342,42 +2342,6 @@ pub fn extr_hw_p010_raw_crop_rem(frame: *const VidFrame, output: &mut [u8], cc: 
             );
             deint_p010_rem(src, u_dst, v_dst);
         }
-    }
-}
-
-pub fn detect_text_based_subtitles(path: &Path) -> Result<Vec<usize>, Xerr> {
-    unsafe {
-        let path = CString::new(path.to_str().ok_or("invalid path")?)?;
-        let mut fmt_ctx: *mut AVFormatContext = null_mut();
-
-        if avformat_open_input(&raw mut fmt_ctx, path.as_ptr(), null(), null_mut()) < 0 {
-            return Err("ffms: open failed".into());
-        }
-
-        let mut text_subs: Vec<usize> = Vec::new();
-        let n = (*fmt_ctx).nb_streams as usize;
-
-        for i in 0..n {
-            let stream = *(*fmt_ctx).streams.add(i);
-            let par = &*(*stream).codecpar;
-
-            if par.codec_type == AVMEDIA_TYPE_SUBTITLE {
-                let codec_id = par.codec_id;
-
-                if !matches!(
-                    codec_id,
-                    AV_CODEC_ID_HDMV_PGS_SUBTITLE
-                        | AV_CODEC_ID_DVB_SUBTITLE
-                        | AV_CODEC_ID_XSUB
-                        | AV_CODEC_ID_DVB_TELETEXT
-                ) {
-                    text_subs.push(i);
-                }
-            }
-        }
-
-        avformat_close_input(&raw mut fmt_ctx);
-        Ok(text_subs)
     }
 }
 

@@ -7,14 +7,14 @@ use ebur128::{EbuR128, Mode};
 
 use crate::{
     audio::{
-        AudioBitrate::{Auto, Fixed, Norm},
+        AudioBitrate::{Auto, Passthrough, Fixed, Norm},
         AudioStreams::{All, Specific},
     },
     error::{
         Xerr,
         Xerr::{Done, Msg},
     },
-    ffms::{get_audio_streams, detect_text_based_subtitles},
+    ffms::{get_audio_streams},
     lavf::AudioDecoder,
     opus::{Encoder, FAMILY_MONO_STEREO, FAMILY_SURROUND},
     progs::ProgsBar,
@@ -39,22 +39,25 @@ impl NormParams {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 #[non_exhaustive]
 pub enum AudioBitrate {
+    #[default]
     Auto,
+    Passthrough,
     Fixed(u16),
     Norm(NormParams),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 #[non_exhaustive]
 pub enum AudioStreams {
+    #[default]
     All,
     Specific(Vec<u8>),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct AudioSpec {
     pub bitrate: AudioBitrate,
     pub streams: AudioStreams,
@@ -67,22 +70,6 @@ pub struct AudioStream {
     pub lang: Option<String>,
     pub layout: String,
 }
-
-const FF_FLAGS: [&str; 13] = [
-    "-fflags",
-    "+genpts+igndts+discardcorrupt+bitexact",
-    "-bitexact",
-    "-avoid_negative_ts",
-    "make_zero",
-    "-err_detect",
-    "ignore_err",
-    "-ignore_unknown",
-    "-reset_timestamps",
-    "1",
-    "-start_at_zero",
-    "-output_ts_offset",
-    "0",
-];
 
 fn parse_norm(s: &str) -> Result<NormParams, Xerr> {
     if s == "norm" {
@@ -107,28 +94,31 @@ fn parse_norm(s: &str) -> Result<NormParams, Xerr> {
 pub fn parse_audio_arg(arg: &str) -> Result<AudioSpec, Xerr> {
     let parts: Vec<&str> = arg.split_whitespace().collect();
     if parts.len() != 2 {
-        return Err("Audio format: -a <auto|norm|norm(I,TP,LRA)|bitrate> <all|stream_ids>".into());
+        return Err("Audio format: -a \"<auto|norm|norm(I,TP,LRA)|bitrate> <all|stream_ids>\"".into());
     }
 
-    Ok(AudioSpec {
-        bitrate: if parts[0] == "auto" {
-            Auto
-        } else if parts[0].starts_with("norm") {
-            Norm(parse_norm(parts[0])?)
-        } else {
-            Fixed(parts[0].parse()?)
-        },
-        streams: if parts[1] == "all" {
-            All
-        } else {
-            Specific(
-                parts[1]
-                    .split(',')
-                    .map(str::parse)
-                    .collect::<Result<_, _>>()?,
-            )
-        },
-    })
+    let bitrate = match parts[0] {
+        "auto" => Auto,
+        "copy" => Passthrough,
+        s if s.starts_with("norm") => Norm(parse_norm(s)?),
+        s => Fixed(s.parse().map_err(|e| {
+            format!("Invalid bitrate '{}': {}", s, e)
+        })?),
+    };
+
+    let streams = if parts[1] == "all" {
+        All
+    } else {
+        Specific(
+            parts[1]
+                .split(',')
+                .map(|s| s.trim().parse())
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("Invalid stream id in '{}': {}", parts[1], e))?,
+        )
+    };
+
+    Ok(AudioSpec {bitrate, streams})
 }
 
 pub fn lang_name(code: &str) -> &str {
@@ -577,10 +567,11 @@ pub fn encode_audio_streams(
                     }
                     AudioBitrate::Fixed(mut b) => {
                         if s.layout.contains("5.1(side)") {
-                            b = (b as f64 * (7.1 / 5.1f64).powf(0.75)) as u32;
+                            b = (b as f32 * (7.1 / 5.1f32).powf(0.75)) as u16;
                         }
                         b
                     }
+                    AudioBitrate::Passthrough => 0
                 }
             };
             TrackJob {
