@@ -313,6 +313,7 @@ unsafe extern "C" {
     ) -> c_int;
     pub fn av_frame_alloc() -> *mut VidFrame;
     pub fn av_frame_free(frame: *mut *mut VidFrame);
+    pub fn av_frame_unref(frame: *mut VidFrame);
     fn av_seek_frame(
         s: *mut AVFormatContext,
         stream_index: c_int,
@@ -630,15 +631,15 @@ impl VideoDecoder {
                 return Err(ff_err(&format!("hwaccel: {} device creation failed", device_name)));
             }
 
-            let cpath = CString::new(path.to_str().ok_or("invalid path")?)?;
-            let mut fmt_ctx: *mut AVFormatContext = null_mut();
+        let cpath = CString::new(path.to_str().ok_or("invalid path")?)?;
+        let mut fmt_ctx: *mut AVFormatContext = null_mut();
 
-            if avformat_open_input(addr_of_mut!(fmt_ctx), cpath.as_ptr(), null(), null_mut()) < 0 {
-                av_buffer_unref(addr_of_mut!(hw_device_ctx));
-                return Err(ff_err("decoder: open failed"));
-            }
+        if avformat_open_input(addr_of_mut!(fmt_ctx), cpath.as_ptr(), null(), null_mut()) < 0 {
+            av_buffer_unref(addr_of_mut!(hw_device_ctx));
+            return Err(ff_err("decoder: open failed"));
+        }
 
-            probe_streams(fmt_ctx, AVMEDIA_TYPE_VIDEO, 0x8000);
+        probe_streams(fmt_ctx, AVMEDIA_TYPE_VIDEO, 0x8000);
 
             let mut dec: *const c_void = null();
             let idx = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, addr_of_mut!(dec), 0);
@@ -659,16 +660,16 @@ impl VideoDecoder {
                 return Err(ff_err("decoder: hw decoder not found"));
             }
 
-            let mut codec_ctx = avcodec_alloc_context3(dec);
-            if codec_ctx.is_null() {
-                avformat_close_input(addr_of_mut!(fmt_ctx));
-                av_buffer_unref(addr_of_mut!(hw_device_ctx));
-                return Err(ff_err("decoder: alloc codec failed"));
-            }
+        let mut codec_ctx = avcodec_alloc_context3(dec);
+        if codec_ctx.is_null() {
+            avformat_close_input(addr_of_mut!(fmt_ctx));
+            av_buffer_unref(addr_of_mut!(hw_device_ctx));
+            return Err(ff_err("decoder: alloc codec failed"));
+        }
 
-            avcodec_parameters_to_context(codec_ctx, par);
-            set_thread_count(codec_ctx, threads);
-            set_hw_device_ctx(codec_ctx, av_buffer_ref(hw_device_ctx));
+        avcodec_parameters_to_context(codec_ctx, par);
+        set_thread_count(codec_ctx, threads);
+        set_hw_device_ctx(codec_ctx, av_buffer_ref(hw_device_ctx));
 
             if avcodec_open2(codec_ctx, dec, null_mut()) < 0 {
                 avcodec_free_context(addr_of_mut!(codec_ctx));
@@ -677,20 +678,20 @@ impl VideoDecoder {
                 return Err(ff_err(&format!("decoder: codec open failed ({})", device_name)));
             }
 
-            Ok(Self {
-                fmt_ctx,
-                codec_ctx,
-                pkt: av_packet_alloc(),
-                frame: av_frame_alloc(),
-                sw_frame: av_frame_alloc(),
-                hw_device_ctx,
-                stream_idx: idx,
-                next_frame: 0,
-                eof: false,
-                hw: true,
-                ts_mul,
-                ts_div,
-            })
+        Ok(Self {
+            fmt_ctx,
+            codec_ctx,
+            pkt: av_packet_alloc(),
+            frame: av_frame_alloc(),
+            sw_frame: av_frame_alloc(),
+            hw_device_ctx,
+            stream_idx: idx,
+            next_frame: 0,
+            eof: false,
+            hw: true,
+            ts_mul,
+            ts_div,
+        })
         }
     }
 
@@ -699,13 +700,19 @@ impl VideoDecoder {
     }
 
     #[inline]
-    fn got_frame(&mut self) -> *const VidFrame {
-        self.next_frame += 1;
+    fn got_frame(&mut self) -> Option<*const VidFrame> {
         if self.hw {
-            unsafe { av_hwframe_transfer_data(self.sw_frame, self.frame, 0) };
-            self.sw_frame
+            unsafe {
+                av_frame_unref(self.sw_frame);
+                if av_hwframe_transfer_data(self.sw_frame, self.frame, 0) < 0 {
+                    return None;
+                }
+            }
+            self.next_frame += 1;
+            Some(self.sw_frame.cast())
         } else {
-            self.frame
+            self.next_frame += 1;
+            Some(self.frame.cast())
         }
     }
 
@@ -714,7 +721,10 @@ impl VideoDecoder {
             loop {
                 let ret = avcodec_receive_frame(self.codec_ctx, self.frame);
                 if ret == 0 {
-                    return self.got_frame();
+                    if let Some(frame) = self.got_frame() {
+                        return frame;
+                    }
+                    continue;
                 }
                 if ret == AVERROR_EOF {
                     self.eof = true;
@@ -738,7 +748,10 @@ impl VideoDecoder {
                     }
                     let r2 = avcodec_receive_frame(self.codec_ctx, self.frame);
                     if r2 == 0 {
-                        return self.got_frame();
+                        if let Some(frame) = self.got_frame() {
+                            return frame;
+                        }
+                        continue;
                     }
                 }
             }
