@@ -771,23 +771,50 @@ fn print_summary(
     let change = ((output_size as f32 / input_size as f32) - 1.0) * 100.0;
 
     let fmt_size = |b: u64| {
-        if b >= 1_000_000_000 {
-            format!("{:.2} GB", b as f32 / 1_000_000_000.0)
+        if b >= 10_000_000_000 {
+            format!("{:4.1} GB", b as f32 / 1_000_000_000.0)
+        } else if b >= 1_000_000_000 {
+            format!("{:4.2} GB", b as f32 / 1_000_000_000.0)
+        } else if b >= 100_000_000 {
+            format!("{:4.0} MB", b as f32 / 1_000_000.0)
+        } else if b >= 10_000_000 {
+            format!("{:4.1} MB", b as f32 / 1_000_000.0)
         } else if b >= 1_000_000 {
-            format!("{:.2} MB", b as f32 / 1_000_000.0)
+            format!("{:4.2} MB", b as f32 / 1_000_000.0)
         } else {
             format!("{} KB", b / 1_000)
         }
     };
 
-    let arrow = if change < 0.0 {
-        "\u{f06c0}"
+    let fmt_four = |f: f32| {
+        if f >= 100.0 {
+            format!("{:3.0}", f)
+        } else if f >= 10.0 {
+            format!("{:4.1}", f)
+        } else {
+            format!("{:4.2}", f)
+        }
+    };
+
+    let feather_or_stone = if change < 0.0 {
+        "\u{1fab6} -"
     } else {
-        "\u{f06c3}"
+        "\u{1faa8} +"
     };
     let change_color = if change < 0.0 { G } else { R };
     let fps_rate = inf.fps_num as f32 / inf.fps_den as f32;
-    let enc_speed = total_frames as f32 / enc_time.as_secs_f32();
+    let enc_fps = total_frames as f32 / enc_time.as_secs_f32();
+    let enc_fps_str = {
+        if enc_fps >= 1000.0 {
+            format!("{:4.0} fps", enc_fps)
+        } else if enc_fps >= 100.0 {
+            format!("{:5.1} fps", enc_fps)
+        } else if enc_fps >= 10.0 {
+            format!("{:5.2} fps", enc_fps)
+        } else {
+            format!("{:5.3} fps", enc_fps)
+        }
+    };
     let enc_secs = enc_time.as_secs();
     let (eh, em, es) = (enc_secs / 3600, (enc_secs % 3600) / 60, enc_secs % 60);
     let dur_secs = duration as u64;
@@ -795,21 +822,24 @@ fn print_summary(
     let (final_width, final_height) = (inf.width - crop.1 * 2, inf.height - crop.0 * 2);
 
     println!(
-    "\n{P}┏━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n\
-{P}┃ {G}✅ {Y}DONE   {P}┃ {R}{:<30.30} {G}󰛂 {G}{:<30.30} {P}┃\n\
-{P}┣━━━━━━━━━━━╋━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n\
-{P}┃ {Y}Size      {P}┃ {R}{:<98} {P}┃\n\
-{P}┣━━━━━━━━━━━╋━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n\
-{P}┃ {Y}Video     {P}┃ {W}{:<4}x{:<4} {P}┃ {B}{:.3} fps {P}┃ {W}{:02}{C}:{W}{:02}{C}:{W}{:02}{:<30} {P}┃\n\
-{P}┣━━━━━━━━━━━╋━━━━━━━━━━━┻━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n\
-{P}┃ {Y}Time      {P}┃ {W}{:02}{C}:{W}{:02}{C}:{W}{:02} {B}@ {:>6.2} fps{:<42} {P}┃\n\
-{P}┗━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛{N}",
+    "\n{P}┏━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n\
+{P}┃ {G}✅ {Y}DONE {P}┃ {R}{:^29.29} {G}󰛂 {G}{:^33.33} {P}┃\n\
+{P}┣━━━━━━━━━╋━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n\
+{P}┃ {Y}Size    {P}┃ {R}{:^36.36} {G}󰛂 {G}{:^46.46} {P}┃\n\
+{P}┣━━━━━━━━━╋━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n\
+{P}┃ {Y}Video   {P}┃ {W}{:>4}x{:<4} {P}┃ {B}{:.3} fps {P}┃ {W}{:02}{C}:{W}{:02}{C}:{W}{:02}{:<32} {P}┃\n\
+{P}┣━━━━━━━━━╋━━━━━━━━━━━┻━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫\n\
+{P}┃ {Y}Time    {P}┃ {W}{:02}{C}:{W}{:02}{C}:{W}{:02} {B}@ {:<9} ({:>}x){:<37} {P}┃\n\
+{P}┗━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛{N}",
     unsafe { args.input.file_name().unwrap_unchecked() }.to_string_lossy(),
     unsafe { args.output.file_name().unwrap_unchecked() }.to_string_lossy(),
-    format!("{} {C}({:.0} kb/s) {G}󰛂 {G}{} {C}({:.0} kb/s) {}{} {:.2}%",
-        fmt_size(input_size), input_br, fmt_size(output_size), output_br, change_color, arrow, change.abs()),
+    format!("{} {C}({:.0} kb/s)", fmt_size(input_size), input_br),
+    format!("{:^29.29}{:>17}",
+        format!("{} {C}({:.0} kb/s)", fmt_size(output_size), output_br),
+        format!("{}{}{:<5}", change_color, feather_or_stone,
+        format!("{}%", fmt_four(change.abs())))),
     final_width, final_height, fps_rate, dh, dm, ds, "",
-    eh, em, es, enc_speed, ""
+    eh, em, es, enc_fps_str, fmt_four(enc_fps / fps_rate), ""
 );
 }
 
