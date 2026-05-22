@@ -666,10 +666,15 @@ function Build-Dav1d {
 
 function Build-FFmpeg {
     param([string]$VsPath, [string]$MsysExe)
-    
-    $env:INCLUDE = "$PWD\dav1d\include;$PWD\dav1d\build\include;$PWD\vulkan\install\include;$env:INCLUDE"
-    $env:LIB = "$PWD\lib;$PWD\vulkan\install\lib;$env:LIB"
 
+    $CudaPath = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.2"
+    
+    $env:INCLUDE = "$PWD\dav1d\include;$PWD\dav1d\build\include;$PWD\vulkan\install\include;$CudaPath\include;$env:INCLUDE"
+    $env:LIB = "$PWD\lib;$PWD\vulkan\install\lib;$CudaPath\lib\x64;$env:LIB"
+
+    if (-not (Test-Path 'nv-codec-headers')) {
+        git clone https://git.videolan.org/git/ffmpeg/nv-codec-headers.git
+    }
     if (Test-Path 'lib\avcodec.lib') {
         Write-Host "[INFO] FFmpeg already compiled. Skipping..." -ForegroundColor Cyan
     }
@@ -681,7 +686,7 @@ function Build-FFmpeg {
             $bashScript = @'
 #!/bin/sh
 set -e
-export PKG_CONFIG_PATH="$(pwd)/../dav1d/build/meson-private:$(pwd)/../vulkan/install/lib/pkgconfig"
+export PKG_CONFIG_PATH="$(pwd)/../dav1d/build/meson-private:$(pwd)/../vulkan/install/lib/pkgconfig:$(pwd)/../nv-codec-headers"
 sed -i "s|^prefix=.*|prefix=$(pwd)/../dav1d/build|" $(pwd)/../dav1d/build/meson-private/dav1d.pc
 sed -i "s|^libdir=.*|libdir=\${prefix}/src|" $(pwd)/../dav1d/build/meson-private/dav1d.pc
 sed -i "s|^includedir=.*|includedir=\${prefix}/../include|" $(pwd)/../dav1d/build/meson-private/dav1d.pc
@@ -705,7 +710,7 @@ sed -i "s/grep -qE 'LNK4044|lld-link: warning: ignoring unknown argument'/false/
     --toolchain="msvc" \
     --enable-lto="thin" \
     --extra-cflags="-flto=thin -DNDEBUG -march=native /clang:-O3" \
-    --extra-libs="dav1d.lib vulkan-1.lib" \
+    --extra-libs="dav1d.lib vulkan-1.lib cuda.lib" \
     --disable-shared \
     --enable-static \
     --pkg-config-flags="--static" \
@@ -826,6 +831,15 @@ sed -i "s/grep -qE 'LNK4044|lld-link: warning: ignoring unknown argument'/false/
     --enable-demuxer=ogg \
     --enable-muxer=segment \
     --enable-muxer=mp4 \
+    --enable-ffnvcodec \
+    --enable-nvdec \
+    --enable-cuda-llvm \
+    --enable-hwaccel=vc1_nvdec \
+    --enable-hwaccel=h264_nvdec \
+    --enable-hwaccel=hevc_nvdec \
+    --enable-hwaccel=vp9_nvdec \
+    --enable-hwaccel=av1_nvdec \
+    --enable-hwaccel=vp8_nvdec \
     --enable-bsf=extract_extradata
 make -j$(nproc)
 '@
