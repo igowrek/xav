@@ -352,6 +352,7 @@ fn add_src_streams(
                 (kind == AVMEDIA_TYPE_AUDIO
                     && passthrough
                     && match &audio_spec.streams {
+                        AudioStreams::NoAudio => false,
                         AudioStreams::All => true,
                         AudioStreams::Specific(list) => list.contains(&(i as u8))
                     }

@@ -53,6 +53,7 @@ pub enum AudioBitrate {
 #[non_exhaustive]
 pub enum AudioStreams {
     #[default]
+    NoAudio,
     All,
     Specific(Vec<u8>),
 }
@@ -531,8 +532,14 @@ pub fn encode_audio_streams(
     sample_ranges: Option<&[(i64, i64)]>,
     progs_line: usize,
 ) -> Result<Vec<(AudioStream, PathBuf)>, Xerr> {
+    // Skip audio by default
+    if matches!(spec.streams, AudioStreams::NoAudio) {
+        return Ok(Vec::new());
+    }
+
     let all = get_streams(input)?;
     let sel: Vec<_> = match spec.streams {
+        AudioStreams::NoAudio => Vec::new(),
         AudioStreams::All => all.iter().collect(),
         AudioStreams::Specific(ref ids) => all.iter().filter(|s| ids.contains(&s.index)).collect(),
     };

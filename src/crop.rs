@@ -86,10 +86,10 @@ pub fn detect_crop(
     }
 
     Ok(CropResult {
-        top: prev_multiple_of_2(best.top),
-        bottom: prev_multiple_of_2(best.bottom),
-        left: prev_multiple_of_2(best.left),
-        right: prev_multiple_of_2(best.right),
+        top: next_multiple_of_2(best.top),
+        bottom: next_multiple_of_2(best.bottom),
+        left: next_multiple_of_2(best.left),
+        right: next_multiple_of_2(best.right),
     })
 }
 
@@ -306,6 +306,6 @@ unsafe fn detect_right_crop(
 }
 
 #[inline]
-const fn prev_multiple_of_2(n: u32) -> u32 {
-    n & !1
+const fn next_multiple_of_2(n: u32) -> u32 {
+    (n + 1) & !1
 }
