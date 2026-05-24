@@ -253,11 +253,9 @@ fn check_param(name: &str, key: &str, val: &str) -> Result<(), Xerr> {
                 key,
                 val,
                 -1,
-                7,
+                10,
                 format_args!(
-                    "{Y}--preset should be between {C}-1 {Y}and {C}7\n{Y}presets 8+ are intended \
-                     for real-time usage and inconsistent\npresets below 0 are intended for \
-                     debugging purposes"
+                    "{Y}--preset should be between {C}-1 {Y}and {C}10\n{Y}"
                 ),
             )?;
         }

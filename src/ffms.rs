@@ -438,10 +438,8 @@ unsafe fn find_hw_decoder(
     let mut decoder = unsafe { avcodec_find_decoder(par.codec_id) };
 
     if device_type == AV_HWDEVICE_TYPE_CUDA {
-        // Only use CUDA for VC-1 (and potentially others you want)
         let decoder_name = match par.codec_id {
             AV_CODEC_ID_VC1 => "vc1_nvdec",
-            // Add others only if you want CUDA for them too
             _ => "",
         };
 
@@ -453,7 +451,6 @@ unsafe fn find_hw_decoder(
             }
         }
     } else if device_type == AV_HWDEVICE_TYPE_VULKAN {
-        // Vulkan path - can add specific Vulkan decoders if needed
         if par.codec_id == AV_CODEC_ID_AV1 {
             let native = unsafe { avcodec_find_decoder_by_name(c"av1".as_ptr()) };
             if !native.is_null() {
@@ -466,10 +463,10 @@ unsafe fn find_hw_decoder(
 }
 
 fn hwdevice_name(device_type: c_int) -> &'static str {
-    if device_type == AV_HWDEVICE_TYPE_VULKAN {
-        "Vulkan"
-    } else if device_type == AV_HWDEVICE_TYPE_CUDA {
+    if device_type == AV_HWDEVICE_TYPE_CUDA {
         "CUDA"
+    } else if device_type == AV_HWDEVICE_TYPE_VULKAN {
+        "Vulkan"
     } else {
         "unknown"
     }
@@ -594,7 +591,7 @@ impl VideoDecoder {
 
     pub fn new_hw(path: &Path, threads: i32) -> Result<Self, Xerr> {
         unsafe {
-            // First, probe to find codec
+            // Probe to determine codec and preferred device
             let cpath = CString::new(path.to_str().ok_or("invalid path")?)?;
             let mut fmt_ctx: *mut AVFormatContext = null_mut();
 
@@ -604,9 +601,7 @@ impl VideoDecoder {
 
             probe_streams(fmt_ctx, AVMEDIA_TYPE_VIDEO, 0x8000);
 
-            let mut dec: *const c_void = null();
-            let idx = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, addr_of_mut!(dec), 0);
-
+            let idx = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, null_mut(), 0);
             let preferred_device = if idx >= 0 {
                 let stream = *(*fmt_ctx).streams.add(idx as usize);
                 let par = &*(*stream).codecpar;
@@ -616,30 +611,20 @@ impl VideoDecoder {
                     AV_HWDEVICE_TYPE_VULKAN
                 }
             } else {
-                AV_HWDEVICE_TYPE_VULKAN // fallback
+                AV_HWDEVICE_TYPE_VULKAN
             };
 
             avformat_close_input(addr_of_mut!(fmt_ctx));
 
-            // Try preferred device first
-            let result = Self::new_hw_with_device(path, threads, preferred_device);
-            if result.is_ok() {
-                return result;
-            }
-
-            // Fallback to the other device
-            let fallback = if preferred_device == AV_HWDEVICE_TYPE_CUDA {
+            // Try preferred device first, then fall back to the other
+            let fallback_device = if preferred_device == AV_HWDEVICE_TYPE_CUDA {
                 AV_HWDEVICE_TYPE_VULKAN
             } else {
                 AV_HWDEVICE_TYPE_CUDA
             };
 
-            let result2 = Self::new_hw_with_device(path, threads, fallback);
-            if result2.is_ok() {
-                return result2;
-            }
-
-            Err(ff_err("hwaccel: no supported GPU backend found"))
+            Self::new_hw_with_device(path, threads, preferred_device)
+                .or_else(|_| Self::new_hw_with_device(path, threads, fallback_device))
         }
     }
 
@@ -650,6 +635,7 @@ impl VideoDecoder {
     ) -> Result<Self, Xerr> {
         unsafe {
             let device_name = hwdevice_name(device_type);
+
             let mut hw_device_ctx: *mut c_void = null_mut();
             if av_hwdevice_ctx_create(
                 addr_of_mut!(hw_device_ctx),
@@ -662,15 +648,15 @@ impl VideoDecoder {
                 return Err(ff_err(&format!("hwaccel: {} device creation failed", device_name)));
             }
 
-        let cpath = CString::new(path.to_str().ok_or("invalid path")?)?;
-        let mut fmt_ctx: *mut AVFormatContext = null_mut();
+            let cpath = CString::new(path.to_str().ok_or("invalid path")?)?;
+            let mut fmt_ctx: *mut AVFormatContext = null_mut();
 
-        if avformat_open_input(addr_of_mut!(fmt_ctx), cpath.as_ptr(), null(), null_mut()) < 0 {
-            av_buffer_unref(addr_of_mut!(hw_device_ctx));
-            return Err(ff_err("decoder: open failed"));
-        }
+            if avformat_open_input(addr_of_mut!(fmt_ctx), cpath.as_ptr(), null(), null_mut()) < 0 {
+                av_buffer_unref(addr_of_mut!(hw_device_ctx));
+                return Err(ff_err("decoder: open failed"));
+            }
 
-        probe_streams(fmt_ctx, AVMEDIA_TYPE_VIDEO, 0x8000);
+            probe_streams(fmt_ctx, AVMEDIA_TYPE_VIDEO, 0x8000);
 
             let mut dec: *const c_void = null();
             let idx = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, addr_of_mut!(dec), 0);
@@ -691,16 +677,16 @@ impl VideoDecoder {
                 return Err(ff_err("decoder: hw decoder not found"));
             }
 
-        let mut codec_ctx = avcodec_alloc_context3(dec);
-        if codec_ctx.is_null() {
-            avformat_close_input(addr_of_mut!(fmt_ctx));
-            av_buffer_unref(addr_of_mut!(hw_device_ctx));
-            return Err(ff_err("decoder: alloc codec failed"));
-        }
+            let mut codec_ctx = avcodec_alloc_context3(dec);
+            if codec_ctx.is_null() {
+                avformat_close_input(addr_of_mut!(fmt_ctx));
+                av_buffer_unref(addr_of_mut!(hw_device_ctx));
+                return Err(ff_err("decoder: alloc codec failed"));
+            }
 
-        avcodec_parameters_to_context(codec_ctx, par);
-        set_thread_count(codec_ctx, threads);
-        set_hw_device_ctx(codec_ctx, av_buffer_ref(hw_device_ctx));
+            avcodec_parameters_to_context(codec_ctx, par);
+            set_thread_count(codec_ctx, threads);
+            set_hw_device_ctx(codec_ctx, av_buffer_ref(hw_device_ctx));
 
             if avcodec_open2(codec_ctx, dec, null_mut()) < 0 {
                 avcodec_free_context(addr_of_mut!(codec_ctx));
@@ -709,20 +695,20 @@ impl VideoDecoder {
                 return Err(ff_err(&format!("decoder: codec open failed ({})", device_name)));
             }
 
-        Ok(Self {
-            fmt_ctx,
-            codec_ctx,
-            pkt: av_packet_alloc(),
-            frame: av_frame_alloc(),
-            sw_frame: av_frame_alloc(),
-            hw_device_ctx,
-            stream_idx: idx,
-            next_frame: 0,
-            eof: false,
-            hw: true,
-            ts_mul,
-            ts_div,
-        })
+            Ok(Self {
+                fmt_ctx,
+                codec_ctx,
+                pkt: av_packet_alloc(),
+                frame: av_frame_alloc(),
+                sw_frame: av_frame_alloc(),
+                hw_device_ctx,
+                stream_idx: idx,
+                next_frame: 0,
+                eof: false,
+                hw: true,
+                ts_mul,
+                ts_div,
+            })
         }
     }
 
@@ -2514,7 +2500,6 @@ pub fn validate_gpu_codec_support(input: &Path, inf: &VidInf) -> Result<(), Xerr
                 continue;
             }
 
-            // let device_name = hwdevice_name(device_type, cuda_type);
             let mut hw_device_ctx: *mut c_void = null_mut();
             if av_hwdevice_ctx_create(
                 addr_of_mut!(hw_device_ctx),
