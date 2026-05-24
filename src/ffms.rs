@@ -438,12 +438,10 @@ unsafe fn find_hw_decoder(
     let mut decoder = unsafe { avcodec_find_decoder(par.codec_id) };
 
     if device_type == AV_HWDEVICE_TYPE_CUDA {
+        // Only use CUDA for VC-1 (and potentially others you want)
         let decoder_name = match par.codec_id {
-            AV_CODEC_ID_H264 => "h264_cuvid",
-            AV_CODEC_ID_HEVC => "hevc_cuvid",
-            AV_CODEC_ID_VP9 => "vp9_cuvid",
-            AV_CODEC_ID_AV1 => "av1_cuvid",
-            AV_CODEC_ID_VC1 => "vc1_cuvid",
+            AV_CODEC_ID_VC1 => "vc1_nvdec",
+            // Add others only if you want CUDA for them too
             _ => "",
         };
 
@@ -454,10 +452,13 @@ unsafe fn find_hw_decoder(
                 decoder = hw_decoder;
             }
         }
-    } else if par.codec_id == AV_CODEC_ID_AV1 {
-        let native = unsafe { avcodec_find_decoder_by_name(c"av1".as_ptr()) };
-        if !native.is_null() {
-            decoder = native;
+    } else if device_type == AV_HWDEVICE_TYPE_VULKAN {
+        // Vulkan path - can add specific Vulkan decoders if needed
+        if par.codec_id == AV_CODEC_ID_AV1 {
+            let native = unsafe { avcodec_find_decoder_by_name(c"av1".as_ptr()) };
+            if !native.is_null() {
+                decoder = native;
+            }
         }
     }
 
@@ -593,22 +594,52 @@ impl VideoDecoder {
 
     pub fn new_hw(path: &Path, threads: i32) -> Result<Self, Xerr> {
         unsafe {
-            let candidates = [AV_HWDEVICE_TYPE_CUDA, AV_HWDEVICE_TYPE_VULKAN];
-            let mut last_err = None;
+            // First, probe to find codec
+            let cpath = CString::new(path.to_str().ok_or("invalid path")?)?;
+            let mut fmt_ctx: *mut AVFormatContext = null_mut();
 
-            for &device_type in &candidates {
-                if device_type == AV_HWDEVICE_TYPE_NONE {
-                    continue;
-                }
-
-                let result = Self::new_hw_with_device(path, threads, device_type);
-                if result.is_ok() {
-                    return result;
-                }
-                last_err = Some(result.err().unwrap());
+            if avformat_open_input(addr_of_mut!(fmt_ctx), cpath.as_ptr(), null(), null_mut()) < 0 {
+                return Err(ff_err("decoder: open failed"));
             }
 
-            Err(last_err.unwrap_or_else(|| ff_err("hwaccel: no supported GPU backend found")))
+            probe_streams(fmt_ctx, AVMEDIA_TYPE_VIDEO, 0x8000);
+
+            let mut dec: *const c_void = null();
+            let idx = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, addr_of_mut!(dec), 0);
+
+            let preferred_device = if idx >= 0 {
+                let stream = *(*fmt_ctx).streams.add(idx as usize);
+                let par = &*(*stream).codecpar;
+                if par.codec_id == AV_CODEC_ID_VC1 {
+                    AV_HWDEVICE_TYPE_CUDA
+                } else {
+                    AV_HWDEVICE_TYPE_VULKAN
+                }
+            } else {
+                AV_HWDEVICE_TYPE_VULKAN // fallback
+            };
+
+            avformat_close_input(addr_of_mut!(fmt_ctx));
+
+            // Try preferred device first
+            let result = Self::new_hw_with_device(path, threads, preferred_device);
+            if result.is_ok() {
+                return result;
+            }
+
+            // Fallback to the other device
+            let fallback = if preferred_device == AV_HWDEVICE_TYPE_CUDA {
+                AV_HWDEVICE_TYPE_VULKAN
+            } else {
+                AV_HWDEVICE_TYPE_CUDA
+            };
+
+            let result2 = Self::new_hw_with_device(path, threads, fallback);
+            if result2.is_ok() {
+                return result2;
+            }
+
+            Err(ff_err("hwaccel: no supported GPU backend found"))
         }
     }
 

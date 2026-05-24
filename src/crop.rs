@@ -75,7 +75,7 @@ pub fn detect_crop(
         let frame = dec.frame_ref();
         if let Some(crop) = detect_frame_crop(frame, inf, config.min_black_pixels) {
             update_best(&mut best, crop);
-            if best.top <= 1 && best.bottom <= 1 && best.left <= 1 && best.right <= 1 {
+            if best.top < 1 && best.bottom < 1 && best.left < 1 && best.right < 1 {
                 return Ok(CropResult::no_crop());
             }
         }
