@@ -1,7 +1,7 @@
 use std::{
     ffi::{CString, c_void},
     fmt::Write as _,
-    fs::{DirEntry, File, read_dir, read_to_string, write},
+    fs::{DirEntry, File, read_dir, read_to_string as read_to_str, write},
     io::{Read as _, Seek as _, SeekFrom, Write as _, copy},
     mem::size_of,
     os::raw::c_int,
@@ -15,8 +15,8 @@ use std::{
 };
 
 use crate::{
-    audio::{AudioBitrate, AudioSpec, AudioStream, AudioStreams, lang_name},
-    encoder::Encoder::{self, Avm},
+    audio::{AuBitrate, AuSpec, AuStream, AuStreams, lang_name},
+    encoder::{Encoder, Encoder::Avm},
     error::Xerr,
     ffms::{
         AV_CODEC_ID_DVB_SUBTITLE, AV_CODEC_ID_DVB_TELETEXT, AV_CODEC_ID_HDMV_PGS_SUBTITLE, AV_CODEC_ID_XSUB, AV_NOPTS_VALUE, AVChapter, AVCodecParameters, AVFMT_FLAG_BITEXACT, AVFormatContext, AVIO_FLAG_WRITE, AVMEDIA_TYPE_AUDIO, AVMEDIA_TYPE_SUBTITLE, AVMEDIA_TYPE_VIDEO, AVPacket, AVRational, AVStream, VidInf, av_dict_copy, av_dict_free, av_dict_set, av_find_best_stream, av_interleaved_write_frame, av_mallocz, av_packet_alloc, av_packet_free, av_packet_rescale_ts, av_packet_unref, av_read_frame, av_write_trailer, avcodec_parameters_copy, avformat_alloc_output_context2, avformat_close_input, avformat_find_stream_info, avformat_free_context, avformat_new_stream, avformat_open_input, avformat_query_codec, avformat_write_header, avio_closep, avio_open, gcd
@@ -49,7 +49,7 @@ pub struct Chunk {
 pub struct ChunkComp {
     pub idx: u16,
     pub frames: usize,
-    pub size: u64,
+    pub sz: u64,
 }
 
 #[derive(Clone)]
@@ -59,57 +59,18 @@ pub struct ResumeInf {
 }
 
 pub fn load_scenes(path: &Path, t_frames: usize) -> Result<Vec<Scene>, Xerr> {
-    let content = read_to_string(path)?;
-    let mut parsed = Vec::new();
-
-    for line in content.lines() {
-        let t = line.trim();
-        if t.is_empty() {
-            continue;
-        }
-
-        let mut starts = Vec::new();
-        let mut params_idx = None;
-        let bytes = t.as_bytes();
-        let mut pos = 0;
-
-        while pos < bytes.len() {
-            while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
-                pos += 1;
-            }
-            if pos == bytes.len() {
-                break;
-            }
-
-            let token_start = pos;
-            while pos < bytes.len() && !bytes[pos].is_ascii_whitespace() {
-                pos += 1;
-            }
-
-            if params_idx.is_some() {
-                continue;
-            }
-
-            let token = &t[token_start..pos];
-            match token.parse::<usize>() {
-                Ok(frame) => starts.push(frame),
-                Err(_) => params_idx = Some(token_start),
-            }
-        }
-
-        if starts.is_empty() {
-            continue;
-        }
-
-        let params = params_idx
-            .map(|idx| t[idx..].trim())
-            .filter(|s| !s.is_empty())
-            .map(Box::from);
-
-        for start in starts {
-            parsed.push((start, params.clone()));
-        }
-    }
+    let content = read_to_str(path)?;
+    let mut parsed: Vec<_> = content
+        .lines()
+        .filter_map(|line| {
+            let t = line.trim();
+            let (f, r) = t.split_once(char::is_whitespace).unwrap_or((t, ""));
+            Some((
+                f.parse::<usize>().ok()?,
+                Some(r.trim()).filter(|s| !s.is_empty()).map(Box::from),
+            ))
+        })
+        .collect();
 
     parsed.sort_unstable_by_key(|&(f, _)| f);
 
@@ -127,7 +88,7 @@ pub fn load_scenes(path: &Path, t_frames: usize) -> Result<Vec<Scene>, Xerr> {
     Ok(scenes)
 }
 
-pub fn validate_scenes(scenes: &[Scene], sc_len: usize) -> Result<(), Xerr> {
+pub fn val_scenes(scenes: &[Scene], sc_len: usize) -> Result<(), Xerr> {
     let max_len = sc_len;
 
     for (i, scene) in scenes.iter().enumerate() {
@@ -145,7 +106,7 @@ pub fn validate_scenes(scenes: &[Scene], sc_len: usize) -> Result<(), Xerr> {
     Ok(())
 }
 
-pub fn chunkify(scenes: &[Scene]) -> Vec<Chunk> {
+pub fn chnkify(scenes: &[Scene]) -> Vec<Chunk> {
     scenes
         .iter()
         .enumerate()
@@ -162,7 +123,7 @@ pub fn get_resume(work_dir: &Path) -> Option<ResumeInf> {
     let path = work_dir.join("done.txt");
     path.exists()
         .then(|| {
-            let content = read_to_string(path).ok()?;
+            let content = read_to_str(path).ok()?;
             let mut chnks_done = Vec::new();
             let mut prior_secs = 0u64;
 
@@ -173,13 +134,13 @@ pub fn get_resume(work_dir: &Path) -> Option<ResumeInf> {
                 }
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() == 3
-                    && let (Ok(idx), Ok(frames), Ok(size)) = (
+                    && let (Ok(idx), Ok(frames), Ok(sz)) = (
                         parts[0].parse::<u16>(),
                         parts[1].parse::<usize>(),
                         parts[2].parse::<u64>(),
                     )
                 {
-                    chnks_done.push(ChunkComp { idx, frames, size });
+                    chnks_done.push(ChunkComp { idx, frames, sz });
                 }
             }
 
@@ -197,13 +158,13 @@ pub fn save_resume(data: &ResumeInf, work_dir: &Path) -> Result<(), Xerr> {
     let elapsed = PRIOR_SECS.load(Relaxed) + ENC_START.get().map_or(0, |s| s.elapsed().as_secs());
     _ = writeln!(content, "elapsed {elapsed}");
 
-    for chunk in &data.chnks_done {
+    for chnk in &data.chnks_done {
         _ = writeln!(
             content,
-            "{idx} {frames} {size}",
-            idx = chunk.idx,
-            frames = chunk.frames,
-            size = chunk.size
+            "{idx} {frames} {sz}",
+            idx = chnk.idx,
+            frames = chnk.frames,
+            sz = chnk.sz
         );
     }
 
@@ -211,8 +172,8 @@ pub fn save_resume(data: &ResumeInf, work_dir: &Path) -> Result<(), Xerr> {
     Ok(())
 }
 
-fn concat_ivf(files: &[PathBuf], output: &Path, total_frames: u32) -> Result<(), Xerr> {
-    let mut out = File::create(output)?;
+fn concat_ivf(files: &[PathBuf], out: &Path, tot_frames: u32) -> Result<(), Xerr> {
+    let mut out = File::create(out)?;
 
     for (i, file) in files.iter().enumerate() {
         let mut f = File::open(file)?;
@@ -224,7 +185,7 @@ fn concat_ivf(files: &[PathBuf], output: &Path, total_frames: u32) -> Result<(),
     }
 
     out.seek(SeekFrom::Start(24))?;
-    out.write_all(&total_frames.to_le_bytes())?;
+    out.write_all(&tot_frames.to_le_bytes())?;
 
     Ok(())
 }
@@ -272,8 +233,8 @@ fn set_meta(st: *mut AVStream, key: &str, val: &str) {
     }
 }
 
-fn add_video(octx: *mut AVFormatContext, chunk0: &Path, inf: &VidInf) -> Result<c_int, Xerr> {
-    let cin = open_in(chunk0)?;
+fn add_video(octx: *mut AVFormatContext, chnk0: &Path, inf: &VidInf) -> Result<c_int, Xerr> {
+    let cin = open_in(chnk0)?;
     let v = best(cin, AVMEDIA_TYPE_VIDEO);
     let res = if v < 0 {
         Err("no video stream in chunk".into())
@@ -308,10 +269,10 @@ fn add_video(octx: *mut AVFormatContext, chunk0: &Path, inf: &VidInf) -> Result<
 
 fn add_opus(
     octx: *mut AVFormatContext,
-    audio: &[(AudioStream, PathBuf)],
+    au: &[(AuStream, PathBuf)],
 ) -> Vec<(*mut AVFormatContext, c_int, c_int)> {
     let mut maps = Vec::new();
-    for entry in audio {
+    for entry in au {
         let Ok(ai) = open_in(&entry.1) else { continue };
         let si = best(ai, AVMEDIA_TYPE_AUDIO);
         let oi = if si < 0 {
@@ -336,8 +297,8 @@ fn add_src_streams(
     octx: *mut AVFormatContext,
     oformat: *const c_void,
     src_ctx: *mut AVFormatContext,
-    passthrough: bool,
-    audio_spec: &AudioSpec,
+    passthrough_au: bool,
+    audio_spec: &AuSpec,
 ) -> Vec<(c_int, c_int)> {
     let mut maps = Vec::new();
     if src_ctx.is_null() {
@@ -350,11 +311,11 @@ fn add_src_streams(
             let kind = (*par).codec_type;
             let want =
                 (kind == AVMEDIA_TYPE_AUDIO
-                    && passthrough
+                    && passthrough_au
                     && match &audio_spec.streams {
-                        AudioStreams::NoAudio => false,
-                        AudioStreams::All => true,
-                        AudioStreams::Specific(list) => list.contains(&(i as u8))
+                        AuStreams::NoAudio => false,
+                        AuStreams::All => true,
+                        AuStreams::Specific(list) => list.contains(&(i as u8))
                     }
                 )
                 || (kind == AVMEDIA_TYPE_SUBTITLE && !matches!(
@@ -376,7 +337,7 @@ fn add_src_streams(
     maps
 }
 
-fn copy_chapters(octx: *mut AVFormatContext, src_ctx: *mut AVFormatContext) {
+fn cpy_chapters(octx: *mut AVFormatContext, src_ctx: *mut AVFormatContext) {
     unsafe {
         let n = (*src_ctx).nb_chapters;
         if n == 0 {
@@ -429,7 +390,7 @@ fn pkt_us(pkt: *mut AVPacket, tb: AVRational) -> i64 {
 }
 
 struct VidSt {
-    chunks: Vec<PathBuf>,
+    chnks: Vec<PathBuf>,
     idx: usize,
     ctx: *mut AVFormatContext,
     cv: c_int,
@@ -465,7 +426,7 @@ struct Feed {
 fn fill_video(pkt: *mut AVPacket, v: &mut VidSt) -> Option<(i64, c_int, AVRational)> {
     loop {
         if v.ctx.is_null() {
-            let path = v.chunks.get(v.idx)?;
+            let path = v.chnks.get(v.idx)?;
             v.idx += 1;
             if let Ok(c) = open_in(path) {
                 v.ctx = c;
@@ -560,10 +521,10 @@ fn fill_stream(
 }
 
 impl Feed {
-    fn video(chunks: Vec<PathBuf>, fps_tb: AVRational, vidx: c_int) -> Self {
+    fn video(chnks: Vec<PathBuf>, fps_tb: AVRational, vidx: c_int) -> Self {
         Self {
             src: Src::Video(VidSt {
-                chunks,
+                chnks,
                 idx: 0,
                 ctx: null_mut(),
                 cv: -1,
@@ -658,15 +619,15 @@ fn mux_streams(octx: *mut AVFormatContext, feeds: &mut [Feed]) {
 }
 
 fn remux(
-    chunks: &[PathBuf],
-    audio: &[(AudioStream, PathBuf)],
+    chnks: &[PathBuf],
+    au: &[(AuStream, PathBuf)],
     src: Option<&Path>,
     ranges: Option<&[(usize, usize)]>,
     out: &Path,
     inf: &VidInf,
-    audio_spec: &AudioSpec,
+    audio_spec: &AuSpec,
 ) -> Result<(), Xerr> {
-    let first = chunks.first().ok_or("no encoded chunks to mux")?;
+    let first = chnks.first().ok_or("no encoded chunks to mux")?;
     let out_c = CString::new(out.to_str().ok_or("invalid output path")?)?;
 
     let mut octx: *mut AVFormatContext = null_mut();
@@ -687,16 +648,16 @@ fn remux(
 
     let src_ctx = src.map_or(null_mut(), |s| open_in(s).unwrap_or(null_mut()));
 
-    let opus = add_opus(octx, audio);
+    let opus = add_opus(octx, au);
     let src_maps = add_src_streams(
         octx,
         oformat,
         src_ctx,
-        matches!(audio_spec.bitrate, AudioBitrate::Passthrough) && ranges.is_none(),
+        matches!(au_spec.bitrate, AuBitrate::Passthrough) && ranges.is_none(),
         audio_spec,
     );
     if ranges.is_none() && !src_ctx.is_null() {
-        copy_chapters(octx, src_ctx);
+        cpy_chapters(octx, src_ctx);
     }
     let splice = ranges.map(|r| {
         build_splice(
@@ -726,7 +687,7 @@ fn remux(
         } else {
             let mut feeds: Vec<Feed> = Vec::with_capacity(opus.len() + 2);
             feeds.push(Feed::video(
-                chunks.to_vec(),
+                chnks.to_vec(),
                 AVRational {
                     num: inf.fps_den as c_int,
                     den: inf.fps_num as c_int,
@@ -758,16 +719,16 @@ fn remux(
 }
 
 pub fn merge_out(
-    encode_dir: &Path,
-    output: &Path,
+    enc_dir: &Path,
+    out: &Path,
     inf: &VidInf,
     encoder: Encoder,
-    audio: &[(AudioStream, PathBuf)],
+    au: &[(AuStream, PathBuf)],
     src: Option<&Path>,
     ranges: Option<&[(usize, usize)]>,
-    audio_spec: &AudioSpec,
+    audio_spec: &AuSpec,
 ) -> Result<(), Xerr> {
-    let mut files: Vec<_> = read_dir(encode_dir)?
+    let mut files: Vec<_> = read_dir(enc_dir)?
         .filter_map(Result::ok)
         .filter(|e| {
             e.path()
@@ -787,13 +748,13 @@ pub fn merge_out(
     let paths: Vec<PathBuf> = files.iter().map(DirEntry::path).collect();
 
     if encoder == Avm {
-        return concat_ivf(&paths, output, inf.frames as u32);
+        return concat_ivf(&paths, out, inf.frames as u32);
     }
 
-    remux(&paths, audio, src, ranges, output, inf, audio_spec)
+    remux(&paths, au, src, ranges, out, inf, audio_spec)
 }
 
-pub fn translate_scenes(scenes: &[Scene], ranges: &[(usize, usize)]) -> Vec<Scene> {
+pub fn trans_scenes(scenes: &[Scene], ranges: &[(usize, usize)]) -> Vec<Scene> {
     let mut cuts: Vec<usize> = scenes.iter().map(|s| s.s_frame).collect();
     for &(s, e) in ranges {
         cuts.push(s);
