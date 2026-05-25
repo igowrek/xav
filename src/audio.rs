@@ -222,6 +222,18 @@ fn reord_surround(buf: &mut [f32], channels: usize, num_samples: usize) {
     }
 }
 
+fn reord_5_1_side_to_7_1(src: &[f32], dst: &mut [f32], num_samples: usize) {
+    // Maps 5.1(side) [FL, FR, FC, LFE, SL, SR] to 7.1 [FL, FC, FR, SL, SR, BL, BR, LFE]
+    const MAP: &[usize] = &[0, 2, 1, 7, 3, 4];
+    for i in 0..num_samples {
+        let src_base = i * 6;
+        let dst_base = i * 8;
+        for (src_idx, &dst_idx) in MAP.iter().enumerate() {
+            dst[dst_base + dst_idx] = src[src_base + src_idx];
+        }
+    }
+}
+
 fn downmix_chnk(src: &[f32], dst: &mut [f32], ch: usize, n: usize) {
     for i in 0..n {
         let b = i * ch;
@@ -287,29 +299,16 @@ fn enc_direct(
         let n = (chnk.len() / ch) as i64;
         if is_5_1_side {
             let mut new_chnk = vec![0.0f32; n as usize * 8];
-            // Implementation for 5.1(side) reordering
-            for i in 0..n as usize {
-                let b = i * ch;
-                let nb = i * 8;
-                new_chnk[nb] = chnk[b]; // FL
-                new_chnk[nb + 2] = chnk[b + 1]; // FR
-                new_chnk[nb + 1] = chnk[b + 2]; // FC
-                new_chnk[nb + 7] = chnk[b + 3]; // LFE
-                new_chnk[nb + 3] = chnk[b + 4]; // SL
-                new_chnk[nb + 4] = chnk[b + 5]; // SR
-            }
+            reord_5_1_side_to_7_1(chnk, &mut new_chnk, n as usize);
             enc.write_float(&new_chnk, 8)?;
-            enced += n;
-            progs.up_au(enced as usize, tot as usize, progs_line, 1, tid);
-        }
-        else {
+        } else {
             if need_reord {
                 reord_surround(chnk, ch, n as usize);
             }
             enc.write_float(chnk, ch)?;
-            enced += n;
-            progs.up_au(enced as usize, tot as usize, progs_line, 1, tid);
         }
+        enced += n;
+        progs.up_au(enced as usize, tot as usize, progs_line, 1, tid);
         Ok(())
     };
     match samp_ranges {
