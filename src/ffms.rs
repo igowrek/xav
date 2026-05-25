@@ -376,6 +376,8 @@ unsafe extern "C" fn ff_log_callback(
     }
 }
 
+#[cold]
+#[inline(never)]
 fn ff_err(context: &str) -> Xerr {
     let detail = LAST_FF_LOG
         .lock()
@@ -475,12 +477,12 @@ pub struct VidInf {
     pub fps_num: u32,
     pub fps_den: u32,
     pub frames: usize,
-    pub color_primaries: Option<i8>,
-    pub transfer_characteristics: Option<i8>,
-    pub matrix_coefficients: Option<i8>,
+    pub color_primaries: i8,
+    pub transfer_characteristics: i8,
+    pub matrix_coefficients: i8,
     pub is_10b: bool,
-    pub color_range: Option<i8>,
-    pub chroma_sample_position: Option<i8>,
+    pub color_range: i8,
+    pub chroma_sample_position: i8,
     pub mastering_display: Option<String>,
     pub content_light: Option<String>,
     pub y_linesz: usize,
@@ -523,7 +525,7 @@ pub unsafe fn probe_streams(fmt_ctx: *mut AVFormatContext, keep_type: c_int, pro
 impl VidDecoder {
     pub fn new(path: &Path, threads: i32) -> Result<Self, Xerr> {
         unsafe {
-            let cpath = CString::new(path.to_str().ok_or("invalid path")?)?;
+            let cpath = CString::new(path.to_str().unwrap_unchecked()).unwrap_unchecked();
             let mut fmt_ctx: *mut AVFormatContext = null_mut();
 
             if avformat_open_input(addr_of_mut!(fmt_ctx), cpath.as_ptr(), null(), null_mut()) < 0 {
@@ -632,10 +634,10 @@ impl VidDecoder {
                 0,
             ) < 0
             {
-                return Err(ff_err(&format!("hwaccel: {} device creation failed", device_name)));
+                return Err(ff_err(&format!("hwdec: {} device creation failed", device_name)));
             }
 
-            let cpath = CString::new(path.to_str().ok_or("invalid path")?)?;
+            let cpath = CString::new(path.to_str().unwrap_unchecked()).unwrap_unchecked();
             let mut fmt_ctx: *mut AVFormatContext = null_mut();
 
             if avformat_open_input(addr_of_mut!(fmt_ctx), cpath.as_ptr(), null(), null_mut()) < 0 {
@@ -927,9 +929,7 @@ fn dec_first_frame(
 
 pub fn vid_bytes(path: &Path, ranges: Option<&[(usize, usize)]>) -> u64 {
     unsafe {
-        let Ok(cp) = CString::new(path.to_str().unwrap_or("")) else {
-            return 0;
-        };
+        let cp = CString::new(path.to_str().unwrap_unchecked()).unwrap_unchecked();
         let mut c: *mut AVFormatContext = null_mut();
         if avformat_open_input(addr_of_mut!(c), cp.as_ptr(), null(), null_mut()) < 0 {
             return 0;
@@ -1016,7 +1016,7 @@ pub fn get_vidinf(path: &Path) -> Result<VidInf, Xerr> {
         av_log_set_level(AV_LOG_ERROR);
         av_log_set_callback(ff_log_callback);
 
-        let cpath = CString::new(path.to_str().ok_or("invalid path")?)?;
+        let cpath = CString::new(path.to_str().unwrap_unchecked()).unwrap_unchecked();
         let mut fmt_ctx: *mut AVFormatContext = null_mut();
 
         if avformat_open_input(addr_of_mut!(fmt_ctx), cpath.as_ptr(), null(), null_mut()) < 0 {
@@ -1092,12 +1092,12 @@ pub fn get_vidinf(path: &Path) -> Result<VidInf, Xerr> {
             fps_num,
             fps_den,
             frames,
-            color_primaries: Some(def_color(fmeta.color_primaries)),
-            transfer_characteristics: Some(def_color(fmeta.transfer_characteristics)),
-            matrix_coefficients: Some(def_color(fmeta.matrix_coefficients)),
+            color_primaries: def_color(fmeta.color_primaries),
+            transfer_characteristics: def_color(fmeta.transfer_characteristics),
+            matrix_coefficients: def_color(fmeta.matrix_coefficients),
             is_10b: fmeta.is_10b,
-            color_range: Some(fmeta.color_range.map_or(0, |v| v as i8)),
-            chroma_sample_position: Some(fmeta.chroma_sample_position.map_or(1, |v| v as i8)),
+            color_range: fmeta.color_range.map_or(0, |v| v as i8),
+            chroma_sample_position: fmeta.chroma_sample_position.map_or(1, |v| v as i8),
             mastering_display: fmeta.mastering_display,
             content_light: fmeta.content_light,
             y_linesz: fmeta.y_linesz,
@@ -1108,7 +1108,7 @@ pub fn get_vidinf(path: &Path) -> Result<VidInf, Xerr> {
 
 pub fn get_au_streams(path: &Path) -> Result<Vec<(u8, u8, Option<String>)>, Xerr> {
     unsafe {
-        let cpath = CString::new(path.to_str().ok_or("invalid path")?)?;
+        let cpath = CString::new(path.to_str().unwrap_unchecked()).unwrap_unchecked();
         let mut fmt_ctx: *mut AVFormatContext = null_mut();
 
         if avformat_open_input(addr_of_mut!(fmt_ctx), cpath.as_ptr(), null(), null_mut()) < 0 {
@@ -1501,8 +1501,8 @@ impl DecStrat {
     }
 }
 
-pub fn get_dec_strat(inf: &VidInf, crop: (u32, u32), hwacc: bool, tq: bool) -> DecStrat {
-    if hwacc {
+pub fn get_dec_strat(inf: &VidInf, crop: (u32, u32), hwdec: bool, tq: bool) -> DecStrat {
+    if hwdec {
         let has_crop = crop != (0, 0);
         let pix_sz = if inf.is_10b { 2 } else { 1 };
         let has_pad = inf.y_linesz != inf.width as usize * pix_sz;
