@@ -213,7 +213,7 @@ pub fn enc_all(
         strat,
         DecStrat::HwNv12To10 | DecStrat::HwNv12To10Stride | DecStrat::HwNv12CropTo10 { .. }
     );
-    let strat = if args.encoder == SvtAv1 && inf.is_10b && args.chnk_buff == args.worker {
+    let strat = if args.encoder == SvtAv1 && inf.is_10b && args.chnk_buf == args.worker {
         strat.to_raw()
     } else {
         strat
@@ -226,9 +226,9 @@ pub fn enc_all(
     );
     let svt_enc_fn = resolve_svt_enc(strat, is_nv12, inf, &pipe);
 
-    let (tx, rx) = bounded::<WorkPkg>(args.chnk_buff);
+    let (tx, rx) = bounded::<WorkPkg>(args.chnk_buf);
     let rx = Arc::new(rx);
-    let sem = Arc::new(Semaphore::new(args.chnk_buff));
+    let sem = Arc::new(Semaphore::new(args.chnk_buf));
 
     let decoder = {
         let chnks = chnks.to_vec();
@@ -714,7 +714,7 @@ fn enc_tq(
     let tq_ctx = parse_tq_ctx(args);
     let strat = unsafe { args.dec_strat.unwrap_unchecked() };
     let pipe = Pipeline::new(inf, strat, args.tq.as_deref());
-    let permits = Arc::new(Semaphore::new(args.chnk_buff));
+    let permits = Arc::new(Semaphore::new(args.chnk_buf));
 
     let dec = spawn_tq_dec(chnks, path, inf, skip_indices, strat, &permits, pipe_reader);
     let (met_tx, met_rx) = bounded::<WorkPkg>(2);

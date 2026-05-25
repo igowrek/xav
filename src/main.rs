@@ -77,7 +77,7 @@ pub struct Args {
     pub inp: PathBuf,
     pub out: PathBuf,
     pub dec_strat: Option<DecStrat>,
-    pub chnk_buff: usize,
+    pub chnk_buf: usize,
     pub ranges: Option<Vec<(usize, usize)>>,
     #[cfg(feature = "vship")]
     pub qp_range: Option<String>,
@@ -269,7 +269,7 @@ macro_rules! arg {
 }
 
 fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
-    let (mut worker, mut chnk_buff, mut sc_only, mut sc_group, mut hwacc) = (1usize, None, false, false, false);
+    let (mut worker, mut chnk_buf, mut sc_only, mut sc_group, mut hwacc) = (1usize, None, false, false, false);
     let (mut sc_file, mut inp, mut out) = (PathBuf::new(), PathBuf::new(), PathBuf::new());
     let (mut encoder, mut params) = (Encoder::default(), String::new());
     let (mut au, mut ranges, mut temp_dir, mut sc_len) = (AuSpec::default(), None, None, 300usize);
@@ -295,7 +295,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
             "-w" | "--worker" => arg!(parse args, i, worker),
             "-s" | "--sc" => arg!(path args, i, sc_file),
             "-p" | "--param" => arg!(str args, i, params),
-            "-b" | "--buff" => arg!(opt_parse args, i, chnk_buff),
+            "-b" | "--buff" => arg!(opt_parse args, i, chnk_buf),
             "-r" | "--range" => {
                 if let Some(v) = next_arg(args, &mut i) {
                     ranges = Some(parse_ranges(v)?);
@@ -348,7 +348,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
         inp,
         out,
         dec_strat: None,
-        chnk_buff: worker + chnk_buff.unwrap_or(0),
+        chnk_buf: worker + chnk_buf.unwrap_or(0),
         ranges,
         sc_only,
         sc_group,
@@ -446,7 +446,7 @@ fn save_args(work_dir: &Path) -> Result<(), Xerr> {
 
 fn get_saved_args(args: &Args) -> Result<Args, Xerr> {
     let canonical = args.inp.canonicalize()?;
-    let hash = hash_input(&canonical);
+    let hash = hash_inp(&canonical);
     let work_dir = match &args.temp_dir {
         Some(dir) => dir.clone(),
         None => current_dir()
@@ -461,7 +461,7 @@ fn get_saved_args(args: &Args) -> Result<Args, Xerr> {
         let mut parsed = get_args(&saved_args, false)?;
         if args.worker > 1 {
             parsed.worker = args.worker;
-            parsed.chunk_buffer = args.chunk_buffer;
+            parsed.chnk_buf = args.chnk_buf;
         }
         Ok(parsed)
     } else {
@@ -631,7 +631,7 @@ fn main_with_args(args: &Args) -> Result<(), Xerr> {
     _ = stdout().flush();
     IN_ALT_SCREEN.store(true, Relaxed);
 
-    let canon_inp = args.input.canonicalize()?;
+    let canon_inp = args.inp.canonicalize()?;
     let hash = hash_inp(&canon_inp);
     let work_dir = match &args.temp_dir {
         Some(dir) => dir.clone(),
@@ -651,8 +651,8 @@ fn main_with_args(args: &Args) -> Result<(), Xerr> {
     }
 
     let inf = get_vidinf(&args.inp)?;
-    
-    if args.hwaccel {
+
+    if args.hwacc {
         // Validate GPU codec support before attempting hardware decoding
         validate_gpu_codec_support(&canon_inp, &inf)?;
     }
@@ -717,7 +717,7 @@ fn main_with_args(args: &Args) -> Result<(), Xerr> {
     let enc_time = enc_start.elapsed() + Dur::from_secs(prior_secs);
 
     let au_tracks = if let ref au_spec = args.au
-        && !matches!(audio_spec.bitrate, AuBitrate::Passthrough)
+        && !matches!(au_spec.bitrate, AuBitrate::Passthrough)
         && args.encoder != Avm
     {
         acq_au(&au_spec, au_files, &args, &inf, &work_dir)?
@@ -733,7 +733,7 @@ fn main_with_args(args: &Args) -> Result<(), Xerr> {
         &au_tracks,
         (args.encoder != Avm).then_some(args.inp.as_path()),
         args.ranges.as_deref(),
-        &args.audio,
+        &args.au,
     )?;
 
     for t in &au_tracks {
@@ -789,7 +789,7 @@ fn print_sum(args: &Args, inf: &VidInf, chnks: &[Chunk], crop: (u32, u32), enc_t
     };
     let change_color = if change < 0.0 { G } else { R };
     let fps_rate = inf.fps_num as f32 / inf.fps_den as f32;
-    let enc_fps = total_frames as f32 / enc_time.as_secs_f32();
+    let enc_fps = tot_frames as f32 / enc_time.as_secs_f32();
     let enc_fps_str = {
         if enc_fps >= 1000.0 {
             format!("{:4.0} fps", enc_fps)
@@ -819,7 +819,7 @@ fn print_sum(args: &Args, inf: &VidInf, chnks: &[Chunk], crop: (u32, u32), enc_t
 {P}┗━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛{N}",
     unsafe { args.inp.file_name().unwrap_unchecked() }.to_string_lossy(),
     unsafe { args.out.file_name().unwrap_unchecked() }.to_string_lossy(),
-    format!("{} {C}({:.0} kb/s)", fmt_sz(inp_sz), input_br),
+    format!("{} {C}({:.0} kb/s)", fmt_sz(inp_sz), inp_br),
     format!("{:^29.29}{:>17}",
         format!("{} {C}({:.0} kb/s)", fmt_sz(out_sz), out_br),
         format!("{}{}{:<5}", change_color, feather_or_stone,

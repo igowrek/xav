@@ -188,13 +188,8 @@ pub fn lang_name(code: &str) -> &str {
 fn get_streams(inp: &Path) -> Result<Vec<AuStream>, Xerr> {
     let mut streams = Vec::new();
     for (index, channels, lang) in get_au_streams(inp)? {
-        let dec = AuDecoder::new(input, index as i32)?;
+        let dec = AuDecoder::new(inp, index as i32)?;
         let layout = dec.layout_str().to_string();
-        let channels = if channels == 6 && layout.contains("5.1(side)") {
-            8
-        } else {
-            channels
-        };
         streams.push(AuStream {
             index,
             channels,
@@ -261,13 +256,17 @@ fn enc_direct(
 ) -> Result<(), Xerr> {
     let mut dec = AuDecoder::new(inp, i32::from(stream.index))?;
     let ch = usize::from(dec.channels());
-    let is_5_1_side = ch == 6 && dec.layout_str().contains("5.1(side)");
-    let effective_ch = if is_5_1_side { 8 } else { ch };
+    let is_5_1_side = dec.layout_str().contains("5.1(side)");
+    let effective_ch = if is_5_1_side {
+        8
+    } else {
+        ch
+    };
     let tot: i64 = samp_ranges.map_or_else(
         || dec.tot_samples(),
         |r| r.iter().map(|&(s, e)| e - s).sum(),
     );
-    let family = if effective_ch <= 2 {
+    let family = if ch <= 2 {
         FAMILY_MONO_STEREO
     } else {
         FAMILY_SURROUND
@@ -276,16 +275,35 @@ fn enc_direct(
     let mut progs = ProgsBar::new();
     let mut enced: i64 = 0;
     let tid = stream.index;
-    let need_reord = ch > 2 && !is_5_1_side;
+    let need_reord = ch > 2;
 
     let cb = |chnk: &mut [f32]| -> Result<(), Xerr> {
         let n = (chnk.len() / ch) as i64;
-        if need_reord {
-            reord_surround(chnk, ch, n as usize);
+        if is_5_1_side {
+            let mut new_chnk = vec![0.0f32; n as usize * 8];
+            // Implementation for 5.1(side) reordering
+            for i in 0..n as usize {
+                let b = i * ch;
+                let nb = i * 8;
+                new_chnk[nb] = chnk[b]; // FL
+                new_chnk[nb + 2] = chnk[b + 1]; // FR
+                new_chnk[nb + 1] = chnk[b + 2]; // FC
+                new_chnk[nb + 7] = chnk[b + 3]; // LFE
+                new_chnk[nb + 3] = chnk[b + 4]; // SL
+                new_chnk[nb + 4] = chnk[b + 5]; // SR
+            }
+            enc.write_float(&new_chnk, 8)?;
+            enced += n;
+            progs.up_au(enced as usize, tot as usize, progs_line, 1, tid);
         }
-        enc.write_float(chnk, ch)?;
-        enced += n;
-        progs.up_au(enced as usize, tot as usize, progs_line, 1, tid);
+        else {
+            if need_reord {
+                reord_surround(chnk, ch, n as usize);
+            }
+            enc.write_float(chnk, ch)?;
+            enced += n;
+            progs.up_au(enced as usize, tot as usize, progs_line, 1, tid);
+        }
         Ok(())
     };
     match samp_ranges {

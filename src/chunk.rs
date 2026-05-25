@@ -625,7 +625,7 @@ fn remux(
     ranges: Option<&[(usize, usize)]>,
     out: &Path,
     inf: &VidInf,
-    audio_spec: &AuSpec,
+    au_spec: &AuSpec,
 ) -> Result<(), Xerr> {
     let first = chnks.first().ok_or("no encoded chunks to mux")?;
     let out_c = CString::new(out.to_str().ok_or("invalid output path")?)?;
@@ -654,7 +654,7 @@ fn remux(
         oformat,
         src_ctx,
         matches!(au_spec.bitrate, AuBitrate::Passthrough) && ranges.is_none(),
-        audio_spec,
+        au_spec,
     );
     if ranges.is_none() && !src_ctx.is_null() {
         cpy_chapters(octx, src_ctx);
@@ -726,7 +726,7 @@ pub fn merge_out(
     au: &[(AuStream, PathBuf)],
     src: Option<&Path>,
     ranges: Option<&[(usize, usize)]>,
-    audio_spec: &AuSpec,
+    au_spec: &AuSpec,
 ) -> Result<(), Xerr> {
     let mut files: Vec<_> = read_dir(enc_dir)?
         .filter_map(Result::ok)
@@ -751,7 +751,7 @@ pub fn merge_out(
         return concat_ivf(&paths, out, inf.frames as u32);
     }
 
-    remux(&paths, au, src, ranges, out, inf, audio_spec)
+    remux(&paths, au, src, ranges, out, inf, au_spec)
 }
 
 pub fn trans_scenes(scenes: &[Scene], ranges: &[(usize, usize)]) -> Vec<Scene> {

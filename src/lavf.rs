@@ -154,8 +154,8 @@ impl AuDecoder {
         self.channels
     }
 
-    pub const fn total_samples(&self) -> i64 {
-        self.total_samples
+    pub const fn tot_samples(&self) -> i64 {
+        self.tot_samples
     }
 
     pub fn layout_str(&self) -> &str {

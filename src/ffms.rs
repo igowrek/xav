@@ -299,7 +299,7 @@ unsafe extern "C" {
     ) -> c_int;
     pub fn av_frame_alloc() -> *mut VidFrame;
     pub fn av_frame_free(frame: *mut *mut VidFrame);
-    pub fn av_frame_unref(frame: *mut VidFrame);
+    // pub fn av_frame_unref(frame: *mut VidFrame);
     pub fn av_seek_frame(
         s: *mut AVFormatContext,
         stream_index: c_int,
@@ -703,7 +703,7 @@ impl VidDecoder {
     }
 
     #[inline]
-    fn got_frame(&mut self) -> Option<*const VidFrame> {
+    fn got_frame(&mut self) -> *const VidFrame {
         self.next_frame += 1;
         if self.hw {
             unsafe { av_hwframe_transfer_data(self.sw_frame, self.frame, 0) };
@@ -718,10 +718,7 @@ impl VidDecoder {
             loop {
                 let ret = avcodec_receive_frame(self.codec_ctx, self.frame);
                 if ret == 0 {
-                    if let Some(frame) = self.got_frame() {
-                        return frame;
-                    }
-                    continue;
+                    return self.got_frame();
                 }
                 if ret == AVERROR_EOF {
                     self.eof = true;
@@ -745,10 +742,7 @@ impl VidDecoder {
                     }
                     let r2 = avcodec_receive_frame(self.codec_ctx, self.frame);
                     if r2 == 0 {
-                        if let Some(frame) = self.got_frame() {
-                            return frame;
-                        }
-                        continue;
+                        return self.got_frame();
                     }
                 }
             }
@@ -2559,7 +2553,7 @@ pub fn validate_gpu_codec_support(input: &Path, inf: &VidInf) -> Result<(), Xerr
             }
 
             avcodec_parameters_to_context(codec_ctx, par);
-            set_thread_count(codec_ctx, 1);
+            set_thread_cnt(codec_ctx, 1);
             set_hw_device_ctx(codec_ctx, av_buffer_ref(hw_device_ctx));
 
             if avcodec_open2(codec_ctx, dec, null_mut()) < 0 {
