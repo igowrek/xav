@@ -24,8 +24,6 @@ use crate::{
     progs::ProgsBar,
 };
 
-const LUMA_PADDING: usize = 80;
-
 fn build_luma_frame<T: Pixel>(
     dec: &mut VideoDecoder,
     w: NonZeroUsize,
@@ -40,10 +38,6 @@ fn build_luma_frame<T: Pixel>(
     }
     let mut frame = unsafe {
         FrameBuilder::new(w, h, ChromaSubsampling::Monochrome, bit_depth)
-            .luma_padding_left(LUMA_PADDING)
-            .luma_padding_right(LUMA_PADDING)
-            .luma_padding_top(LUMA_PADDING)
-            .luma_padding_bottom(LUMA_PADDING)
             .build::<T>()
             .unwrap_unchecked()
     };
@@ -70,8 +64,9 @@ pub fn fd_scenes(
     crop: (u32, u32),
     line: usize,
     hwaccel: bool,
+    sc_len: usize,
 ) -> Result<(), Xerr> {
-    let max_dist = 300;
+    let max_dist = sc_len;
     let tot_frames = inf.frames;
     let (cv, ch) = crop;
     let cropped_w = inf.width - ch * 2;

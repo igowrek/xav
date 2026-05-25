@@ -109,6 +109,7 @@ pub struct Args {
     pub probe_params: Option<String>,
     pub sc_only: bool,
     pub sc_group: bool,
+    pub sc_len: usize,
     pub hwaccel: bool,
     pub temp_dir: Option<PathBuf>,
 }
@@ -131,7 +132,7 @@ fn print_help() {
     println!("{C}-b {P}┃ {C}--buffer     {W}Extra chunks to hold in front buffer");
     println!("{C}-s {P}┃ {C}--sc         {W}Specify SCD file. Auto gen if not specified");
     println!("{C}-r {P}┃ {C}--range      {W}Trim and splice frame ranges: {G}\"10-20,90-100\"");
-    println!("{C}-a {P}┃ {C}--audio      {W}Encode to Opus: {Y}-a {G}\"{R}<{G}auto{P}┃{G}norm{P}┃{G}bitrate{R}> {R}<{G}all{P}┃{G}stream_ids{R}>{G}\"");
+    println!("{C}-a {P}┃ {C}--audio      {W}Encode to Opus: {Y}-a {G}\"{R}<{G}auto{P}┃copy┃{G}norm{P}┃{G}bitrate{R}> {R}<{G}all{P}┃{G}stream_ids{R}>{G}\"");
     println!("                  {B}Examples: {Y}-a {G}\"auto all\"{W}, {Y}-a {G}\"norm 1\"{W}, {Y}-a {G}\"128 1,2\"");
     #[cfg(feature = "vship")]
     {
@@ -145,7 +146,8 @@ fn print_help() {
     println!("   {P}┃ {C}--hwaccel    {W}Use Vulkan hw decoding (perf depends on the input video and hardware)");
     println!("   {P}┃ {C}--sc-only    {W}Exit after SCD");
     println!("   {P}┃ {C}--sc-group   {W}Generate a grouped SCD file");
-    println!("   {P}| {C}--temp-dir   {W}Set directory for temporary files");
+    println!("   {P}┃ {C}--sc-len     {W}Maximum scene length in frames (default: 300)");
+    println!("   {P}┃ {C}--temp-dir   {W}Set directory for temporary files");
 
     println!();
     println!("{P}Example:{W}");
@@ -286,7 +288,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
     let (mut worker, mut chunk_buffer, mut sc_only, mut sc_group, mut hwaccel) = (1usize, None, false, false, false);
     let (mut scene_file, mut input, mut output) = (PathBuf::new(), PathBuf::new(), PathBuf::new());
     let (mut encoder, mut params) = (Encoder::default(), String::new());
-    let (mut audio, mut ranges, mut temp_dir) = (AudioSpec::default(), None, None);
+    let (mut audio, mut ranges, mut temp_dir, mut sc_len) = (AudioSpec::default(), None, None, 300);
     #[cfg(feature = "vship")]
     let (mut target_quality, mut qp_range, mut cvvdp_config, mut probe_params) = (
         None::<String>,
@@ -335,6 +337,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
             "--hwaccel" => hwaccel = true,
             "--sc-only" => sc_only = true,
             "--sc-group" => sc_group = true,
+            "--sc-len" => arg!(parse args, i, sc_len),
             "--temp-dir" => arg!(opt_path args, i, temp_dir),
             "-h" | "--help" => {
                 print_help();
@@ -365,6 +368,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
         ranges,
         sc_only,
         sc_group,
+        sc_len,
         hwaccel,
         temp_dir,
         #[cfg(feature = "vship")]
@@ -403,6 +407,10 @@ fn get_args(args: &[String], allow_resume: bool) -> Result<Args, Xerr> {
         || result.output == PathBuf::new()
     {
         return Err("Missing args".into());
+    }
+
+    if result.sc_len < 65 {
+        return Err(format!("Max scene length must be at least 65 frames, got {}", result.sc_len).into());
     }
 
     #[cfg(feature = "vship")]
@@ -504,7 +512,7 @@ fn parse_quoted_args(cmd_line: &str) -> Vec<String> {
 
 fn ensure_scene_file(args: &Args, inf: &VidInf, crop: (u32, u32), line: usize) -> Result<(), Xerr> {
     if !args.scene_file.exists() {
-        fd_scenes(&args.input, &args.scene_file, args.sc_group, inf, crop, line, args.hwaccel)?;
+        fd_scenes(&args.input, &args.scene_file, args.sc_group, inf, crop, line, args.hwaccel, args.sc_len)?;
     }
     Ok(())
 }
@@ -611,7 +619,7 @@ fn scd_and_audio(
     audio_handle: Option<AudioHandle>,
 ) -> Result<Option<AudioResult>, Xerr> {
     if let Some(handle) = audio_handle {
-        fd_scenes(&args.input, &args.scene_file, args.sc_group, inf, crop, 1, args.hwaccel)?;
+        fd_scenes(&args.input, &args.scene_file, args.sc_group, inf, crop, 1, args.hwaccel, args.sc_len)?;
         let result = handle
             .join()
             .map_err(|_e| Msg("Audio encoding thread panicked".into()))?;
@@ -622,8 +630,8 @@ fn scd_and_audio(
     }
 }
 
-fn validate_all_scenes(scenes: &[chunk::Scene], enc: Encoder) -> Result<(), Xerr> {
-    validate_scenes(scenes)?;
+fn validate_all_scenes(scenes: &[chunk::Scene], enc: Encoder, sc_len: usize) -> Result<(), Xerr> {
+    validate_scenes(scenes, sc_len)?;
     if enc == SvtAv1 {
         for s in scenes {
             if let Some(ref p) = s.params {
@@ -696,7 +704,7 @@ fn main_with_args(args: &Args) -> Result<(), Xerr> {
         scenes
     };
 
-    validate_all_scenes(&scenes, args.encoder)?;
+    validate_all_scenes(&scenes, args.encoder, args.sc_len)?;
     if args.sc_only {
         return Ok(());
     }

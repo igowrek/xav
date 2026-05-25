@@ -127,8 +127,8 @@ pub fn load_scenes(path: &Path, t_frames: usize) -> Result<Vec<Scene>, Xerr> {
     Ok(scenes)
 }
 
-pub fn validate_scenes(scenes: &[Scene]) -> Result<(), Xerr> {
-    let max_len = 300;
+pub fn validate_scenes(scenes: &[Scene], sc_len: usize) -> Result<(), Xerr> {
+    let max_len = sc_len;
 
     for (i, scene) in scenes.iter().enumerate() {
         let len = scene.e_frame.saturating_sub(scene.s_frame);

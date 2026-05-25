@@ -833,13 +833,10 @@ sed -i "s/grep -qE 'LNK4044|lld-link: warning: ignoring unknown argument'/false/
     --enable-muxer=mp4 \
     --enable-ffnvcodec \
     --enable-nvdec \
-    --enable-cuda-llvm \
     --enable-hwaccel=vc1_nvdec \
     --enable-hwaccel=h264_nvdec \
     --enable-hwaccel=hevc_nvdec \
     --enable-hwaccel=vp9_nvdec \
-    --enable-hwaccel=av1_nvdec \
-    --enable-hwaccel=vp8_nvdec \
     --enable-bsf=extract_extradata
 make -j$(nproc)
 '@
