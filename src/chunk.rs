@@ -19,7 +19,16 @@ use crate::{
     encoder::{Encoder, Encoder::Avm},
     error::Xerr,
     ffms::{
-        AV_CODEC_ID_DVB_SUBTITLE, AV_CODEC_ID_DVB_TELETEXT, AV_CODEC_ID_HDMV_PGS_SUBTITLE, AV_CODEC_ID_XSUB, AV_NOPTS_VALUE, AVChapter, AVCodecParameters, AVFMT_FLAG_BITEXACT, AVFormatContext, AVIO_FLAG_WRITE, AVMEDIA_TYPE_AUDIO, AVMEDIA_TYPE_SUBTITLE, AVMEDIA_TYPE_VIDEO, AVPacket, AVRational, AVStream, VidInf, av_dict_copy, av_dict_free, av_dict_set, av_find_best_stream, av_interleaved_write_frame, av_mallocz, av_packet_alloc, av_packet_free, av_packet_rescale_ts, av_packet_unref, av_read_frame, av_write_trailer, avcodec_parameters_copy, avformat_alloc_output_context2, avformat_close_input, avformat_find_stream_info, avformat_free_context, avformat_new_stream, avformat_open_input, avformat_query_codec, avformat_write_header, avio_closep, avio_open, gcd
+        AV_CODEC_ID_DVB_SUBTITLE, AV_CODEC_ID_DVB_TELETEXT, AV_CODEC_ID_HDMV_PGS_SUBTITLE, AV_CODEC_ID_XSUB,
+        AV_NOPTS_VALUE, AVChapter, AVCodecParameters, AVFMT_FLAG_BITEXACT, AVFormatContext,
+        AVIO_FLAG_WRITE, AVMEDIA_TYPE_AUDIO, AVMEDIA_TYPE_SUBTITLE, AVMEDIA_TYPE_VIDEO, AVPacket,
+        AVRational, AVSEEK_FLAG_BACKWARD, AVStream, VidInf, av_dict_copy, av_dict_free, av_dict_set,
+        av_find_best_stream, av_interleaved_write_frame, av_mallocz, av_packet_alloc,
+        av_packet_free, av_packet_rescale_ts, av_packet_unref, av_read_frame, av_seek_frame,
+        av_write_trailer, avcodec_parameters_copy, avformat_alloc_output_context2,
+        avformat_close_input, avformat_find_stream_info, avformat_free_context,
+        avformat_new_stream, avformat_open_input, avformat_query_codec, avformat_write_header,
+        avio_closep, avio_open, gcd,
     },
 };
 
@@ -498,6 +507,14 @@ fn fill_stream(
     maps: &[(c_int, c_int)],
     splice: Option<&Splice>,
 ) -> Option<(i64, c_int, AVRational)> {
+    let max_e_us: i64 = splice
+        .and_then(|sp| {
+            sp.map
+                .iter()
+                .map(|&(_, ee, _)| rescale(ee, sp.fps, TB_US))
+                .max()
+        })
+        .unwrap_or(i64::MAX);
     loop {
         if unsafe { av_read_frame(ctx, pkt) } < 0 {
             return None;
@@ -510,7 +527,11 @@ fn fill_stream(
                     if let Some(op) = splice_pkt(pkt, in_tb, sp) {
                         return Some((rescale(op, in_tb, TB_US), oi, in_tb));
                     }
+                    let pts = unsafe { (*pkt).pts };
                     unsafe { av_packet_unref(pkt) };
+                    if pts != AV_NOPTS_VALUE && rescale(pts, in_tb, TB_US) > max_e_us {
+                        return None;
+                    }
                     continue;
                 }
                 None => return Some((pkt_us(pkt, in_tb), oi, in_tb)),
@@ -668,6 +689,14 @@ fn remux(
             },
         )
     });
+
+    if !src_ctx.is_null()
+        && let Some(rs) = ranges
+        && let Some(min_s) = rs.iter().map(|&(s, _)| s as i64).min()
+    {
+        let ts = min_s * 1_000_000 * i64::from(inf.fps_den) / i64::from(inf.fps_num);
+        unsafe { av_seek_frame(src_ctx, -1, ts, AVSEEK_FLAG_BACKWARD) };
+    }
 
     unsafe { (*octx).flags |= AVFMT_FLAG_BITEXACT };
 
