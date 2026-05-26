@@ -381,10 +381,6 @@ fn get_args(args: &[String], allow_resume: bool) -> Result<Args, Xerr> {
         return Err("Missing input".into());
     }
 
-    if result.inp == PathBuf::new() {
-        return Err("Missing input".into());
-    }
-
     if allow_resume && let Ok(saved_args) = get_saved_args(&result) {
         return Ok(saved_args);
     }
@@ -653,7 +649,7 @@ fn main_with_args(args: &Args) -> Result<(), Xerr> {
 
     let inf = get_vidinf(&args.inp)?;
 
-    if args.hwacc {
+    if args.hwdec {
         // Validate GPU codec support before attempting hardware decoding
         validate_gpu_codec_support(&canon_inp, &inf)?;
     }

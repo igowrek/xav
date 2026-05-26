@@ -2604,7 +2604,7 @@ pub fn validate_gpu_codec_support(input: &Path, inf: &VidInf) -> Result<(), Xerr
         }
 
         Err(format!(
-            "GPU does not support {} {} decoding. Try encoding without --hwaccel.",
+            "GPU does not support {} {} decoding. Try encoding without --hwdec.",
             codec_name, bit_depth_str
         )
         .into())
