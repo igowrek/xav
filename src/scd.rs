@@ -78,7 +78,7 @@ pub fn fd_scenes(
         let progs_clone = Arc::clone(&progs);
         move |current: usize, _keyframes: usize| {
             if let Ok(mut pb) = progs_clone.lock() {
-                pb.up_scenes(current, tot_frames, line);
+                pb.up_frames(current, tot_frames, line, "SCD");
             }
         }
     };
@@ -99,9 +99,8 @@ pub fn fd_scenes(
     };
 
     if let Ok(mut pb) = progs.lock() {
-        pb.up_scenes_final(tot_frames, line);
+        pb.up_frames(tot_frames, tot_frames, line, "SCD");
     }
-    ProgsBar::finish_scenes();
 
     let mut scores: Vec<Option<(f32, f32)>> = vec![None; tot_frames];
     for (k, v) in results.scores {
