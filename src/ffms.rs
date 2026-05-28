@@ -50,6 +50,12 @@ pub const AV_CODEC_ID_HEVC: c_int = 173;
 pub const AV_CODEC_ID_VP9: c_int = 167;
 pub const AV_CODEC_ID_AV1: c_int = 225;
 pub const AV_CODEC_ID_VC1: c_int = 70;
+pub const AV_CODEC_ID_WMV3: c_int = 71;
+pub const AV_CODEC_ID_MPEG4: c_int = 12;
+pub const AV_CODEC_ID_MJPEG: c_int = 7;
+pub const AV_CODEC_ID_VP8: c_int = 139;
+pub const AV_CODEC_ID_MPEG1VIDEO: c_int = 1;
+pub const AV_CODEC_ID_MPEG2VIDEO: c_int = 2;
 pub const AV_CODEC_ID_HDMV_PGS_SUBTITLE: c_int = 94214;
 pub const AV_CODEC_ID_DVB_SUBTITLE: c_int = 94209;
 pub const AV_CODEC_ID_XSUB: c_int = 94211;
@@ -430,6 +436,12 @@ unsafe fn find_hw_decoder(
     if device_type == AV_HWDEVICE_TYPE_CUDA {
         let decoder_name = match par.codec_id {
             AV_CODEC_ID_VC1 => "vc1_nvdec",
+            AV_CODEC_ID_WMV3 => "wmv3_nvdec",
+            AV_CODEC_ID_MPEG4 => "mpeg4_nvdec",
+            AV_CODEC_ID_MJPEG => "mjpeg_nvdec",
+            AV_CODEC_ID_VP8 => "vp8_nvdec",
+            AV_CODEC_ID_MPEG1VIDEO => "mpeg1_nvdec",
+            AV_CODEC_ID_MPEG2VIDEO => "mpeg2_nvdec",
             _ => "",
         };
 
@@ -2521,6 +2533,12 @@ pub fn validate_gpu_codec_support(input: &Path, inf: &VidInf) -> Result<(), Xerr
         AV_CODEC_ID_VP9 => "VP9",
         AV_CODEC_ID_AV1 => "AV1",
         AV_CODEC_ID_VC1 => "VC-1",
+        AV_CODEC_ID_WMV3 => "WMV3",
+        AV_CODEC_ID_MPEG4 => "MPEG-4",
+        AV_CODEC_ID_MJPEG => "MJPEG",
+        AV_CODEC_ID_VP8 => "VP8",
+        AV_CODEC_ID_MPEG1VIDEO => "MPEG-1 Video",
+        AV_CODEC_ID_MPEG2VIDEO => "MPEG-2 Video",
         _ => "Unknown codec",
     };
 

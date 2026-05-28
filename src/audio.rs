@@ -7,7 +7,7 @@ use ebur128::{EbuR128, Mode};
 
 use crate::{
     audio::{
-        AuBitrate::{Auto, Passthrough, Fixed, Norm},
+        AuMode::{Auto, Passthrough, Bitrate, Norm},
         AuStreams::{All, Specific},
     },
     error::{Xerr, Xerr::Msg},
@@ -38,11 +38,11 @@ impl NormParams {
 
 #[derive(Clone, Default)]
 #[non_exhaustive]
-pub enum AuBitrate {
+pub enum AuMode {
     #[default]
     Auto,
     Passthrough,
-    Fixed(u16),
+    Bitrate(u16),
     Norm(NormParams),
 }
 
@@ -57,7 +57,7 @@ pub enum AuStreams {
 
 #[derive(Clone, Default)]
 pub struct AuSpec {
-    pub bitrate: AuBitrate,
+    pub mode: AuMode,
     pub streams: AuStreams,
 }
 
@@ -92,30 +92,37 @@ fn parse_norm(s: &str) -> Result<NormParams, Xerr> {
 
 pub fn parse_au_arg(arg: &str) -> Result<AuSpec, Xerr> {
     let parts: Vec<&str> = arg.split_whitespace().collect();
-    if parts.len() != 2 {
-        return Err("Audio format: -a \"<auto|norm|norm(I,TP,LRA)|kbps> <all|stream_ids>\"".into());
-    }
+    let (mode_arg, streams_arg) = match parts.as_slice() {
+        [s] => (*s, "all"),
+        [s, stream] => (*s, *stream),
+        _ => {
+            return Err(
+                "Audio format: -a \"<auto|copy|norm|norm(I,TP,LRA)|<kbps>> [all|<id1[,id2,...]>]\""
+                    .into(),
+            )
+        }
+    };
 
-    let bitrate = match parts[0] {
+    let mode = match mode_arg {
         "auto" => Auto,
         "copy" => Passthrough,
         s if s.starts_with("norm") => Norm(parse_norm(s)?),
-        s => Fixed(s.parse()?),
+        s => Bitrate(s.parse()?),
     };
 
-    let streams = if parts[1] == "all" {
+    let streams = if streams_arg == "all" {
         All
     } else {
         Specific(
-            parts[1]
+            streams_arg
                 .split(',')
                 .map(str::parse)
                 .collect::<Result<_, _>>()
-                .map_err(|e| format!("Invalid stream id in '{}': {}", parts[1], e))?,
+                .map_err(|e| format!("Invalid stream id in '{}': {}", streams_arg, e))?,
         )
     };
 
-    Ok(AuSpec {bitrate, streams})
+    Ok(AuSpec {mode, streams})
 }
 
 pub fn lang_name(code: &str) -> &str {
@@ -453,8 +460,8 @@ pub fn enc_au_streams(
         AuStreams::Specific(ref ids) => all.iter().filter(|s| ids.contains(&s.index)).collect(),
     };
 
-    let norm_params = match spec.bitrate {
-        AuBitrate::Norm(p) => Some(p),
+    let norm_params = match spec.mode {
+        AuMode::Norm(p) => Some(p),
         _ => None,
     };
 
@@ -465,8 +472,8 @@ pub fn enc_au_streams(
             let np = norm_params.filter(|_| s.channels > 2);
             let do_norm = np.is_some();
             let bitrate = np.map_or_else(
-                || match spec.bitrate {
-                    AuBitrate::Auto | AuBitrate::Norm(_) => {
+                || match spec.mode {
+                    AuMode::Auto | AuMode::Norm(_) => {
                         let cc = match s.channels {
                             1 => 1.0,
                             2 => 2.0,
@@ -480,13 +487,13 @@ pub fn enc_au_streams(
                         };
                         (128.0 * (cc / 2.0f32).powf(0.75)) as u16
                     }
-                    AuBitrate::Fixed(mut b) => {
+                    AuMode::Bitrate(mut b) => {
                         if s.layout.contains("5.1(side)") {
                             b = (b as f32 * (7.1 / 5.1f32).powf(0.75)) as u16;
                         }
                         b
                     }
-                    AuBitrate::Passthrough => 0
+                    AuMode::Passthrough => 0
                 },
                 |p| p.bitrate,
             );

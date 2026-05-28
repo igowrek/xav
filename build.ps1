@@ -818,6 +818,10 @@ sed -i "s/grep -qE 'LNK4044|lld-link: warning: ignoring unknown argument'/false/
     --enable-parser=opus \
     --enable-parser=vorbis \
     --enable-parser=flac \
+    --enable-parser=mjpeg \
+    --enable-parser=mpeg4video \
+    --enable-parser=mpegvideo \
+    --enable-parser=vp8 \
     --enable-vulkan \
     --enable-hwaccel=h264_vulkan \
     --enable-hwaccel=hevc_vulkan \
@@ -837,6 +841,13 @@ sed -i "s/grep -qE 'LNK4044|lld-link: warning: ignoring unknown argument'/false/
     --enable-hwaccel=h264_nvdec \
     --enable-hwaccel=hevc_nvdec \
     --enable-hwaccel=vp9_nvdec \
+    --enable-hwaccel=mjpeg_nvdec  \
+    --enable-hwaccel=mpeg1_nvdec \
+    --enable-hwaccel=mpeg2_nvdec \
+    --enable-hwaccel=vp8_nvdec \
+    --enable-hwaccel=wmv3_nvdec \
+    --enable-hwaccel=mpeg4_nvdec \
+    --enable-decoder=mjpeg \
     --enable-bsf=extract_extradata
 make -j$(nproc)
 '@

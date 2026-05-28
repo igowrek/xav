@@ -122,8 +122,14 @@ pub fn fd_scenes(
                 current_slice.len()
             };
             let (group, remainder) = current_slice.split_at(end_index);
-            for &scene_frame in group {
-                _ = write!(content, "{scene_frame} ");
+            let (first, rest) = match group.split_first() {
+                Some((first, rest)) => (first, rest),
+                None => continue,
+            };
+
+            _ = write!(content, "{first}");
+            for &scene_frame in rest {
+                _ = write!(content, " {scene_frame}");
             }
             _ = writeln!(content);
             current_slice = remainder.to_vec();

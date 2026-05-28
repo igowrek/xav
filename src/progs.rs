@@ -292,7 +292,7 @@ impl ProgsTrack {
         write_bar(&mut line, filled, G_HASH, R_DASH);
         _ = write!(
             line,
-            "{C}] {W}{perc:3}%{C}, {Y}{fps:6.2}{C}, {G}{current:3}{C}/{R}{tot:3}"
+            "{C}] {W}{perc:3}%{C}, {Y}{fps:6.2}{C}, {G}{current:3}{C}/{R}{tot:<3}"
         );
 
         self.inner.put(worker_id, line);
@@ -317,7 +317,7 @@ impl ProgsTrack {
         write_bar(&mut line, filled, B_HASH, Y_DASH);
         _ = write!(
             line,
-            "{P}] {W}{perc:3}%{C}, {Y}{fps:6.2}{C}, {G}{current:3}{C}/{R}{tot:3}"
+            "{P}] {W}{perc:3}%{C}, {Y}{fps:6.2}{C}, {G}{current:3}{C}/{R}{tot:<3}"
         );
 
         if let Some(d) = frames_delta {
@@ -426,7 +426,7 @@ fn watch_avm(inner: &Shared, rd: impl Read, w: Watch) {
             write_bar(&mut line, filled, B_HASH, Y_DASH);
             _ = write!(
                 line,
-                "{P}] {W}{perc:3}%{C}, {Y}{fps:6.2}{C}, {G}{poc_cnt:3}{C}/{R}{tot:3}"
+                "{P}] {W}{perc:3}%{C}, {Y}{fps:6.2}{C}, {G}{poc_cnt:3}{C}/{R}{tot:<3}"
             );
 
             if track_frames {
@@ -533,7 +533,7 @@ fn watch_vvenc(inner: &Shared, rd: impl Read, w: Watch) {
             write_bar(&mut line, filled, B_HASH, Y_DASH);
             _ = write!(
                 line,
-                "{P}] {W}{perc:3}%{C}, {Y}{fps:6.2}{C}, {G}{poc_cnt:3}{C}/{R}{tot:3}"
+                "{P}] {W}{perc:3}%{C}, {Y}{fps:6.2}{C}, {G}{poc_cnt:3}{C}/{R}{tot:<3}"
             );
 
             if track_frames {

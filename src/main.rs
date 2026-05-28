@@ -1,10 +1,9 @@
 use std::{
     collections::hash_map::DefaultHasher,
     env::args as env_args,
-    env::current_dir as current_dir,
     fs::{
         create_dir_all, read_to_string as read_to_str, remove_dir_all as rm_dir_all,
-        remove_file as rm_file, write as write_to,
+        remove_file as rm_file, OpenOptions, write as write_to,
     },
     hash::{Hash as _, Hasher as _},
     io::{Write as _, stdout},
@@ -49,7 +48,7 @@ mod vship;
 mod worker;
 mod y4m;
 
-use audio::{AuSpec, AuBitrate, AuStream, enc_au_streams, frame_samp, parse_au_arg};
+use audio::{AuSpec, AuMode, AuStream, enc_au_streams, frame_samp, parse_au_arg};
 use chunk::{
     Chunk, chnkify, get_resume, init_elapsed, load_scenes, merge_out, trans_scenes, val_scenes,
 };
@@ -116,8 +115,8 @@ fn print_help() {
     println!("{C}-b {P}┃ {C}--buff       {W}Extra chunks to hold in front buffer");
     println!("{C}-s {P}┃ {C}--sc         {W}Specify SCD file. Auto gen if not specified");
     println!("{C}-r {P}┃ {C}--range      {W}Trim and splice frame ranges: {G}\"10-20,90-100\"");
-    println!("{C}-a {P}┃ {C}--audio      {W}Encode to Opus: {Y}-a {G}\"{R}<{G}auto{P}┃copy┃{G}norm{P}┃{G}<kbps>{R}> {R}<{G}all{P}┃{G}stream_ids{R}>{G}\"");
-    println!("                  {B}Examples: {Y}-a {G}\"auto all\"{W}, {Y}-a {G}\"norm 1\"{W}, {Y}-a {G}\"128 1,2\"{W}, {Y}-a {G}\"norm(-16,-1.5,16,192) all\"");
+    println!("{C}-a {P}┃ {C}--audio      {W}Encode to Opus: {Y}-a {G}\"{R}<{G}auto{P}┃copy┃{G}norm{P}┃{G}<kbps>{R}> [all|<id1[,id2,...]>]\"");
+    println!("                  {B}Examples: {Y}-a {G}\"auto\"{W}, {Y}-a {G}\"copy\"{W}, {Y}-a {G}\"norm\"{W}, {Y}-a {G}\"128 1,2\"{W}, {Y}-a {G}\"norm(-16,-1.5,16,192) all\"");
     #[cfg(feature = "vship")]
     {
         println!("{C}-t {P}┃ {C}--tq         {W}TQ Range: {R}<8{B}={W}Butter5pn, {R}8-10{B}={W}CVVDP, {R}>10{B}={W}SSIMU2: {Y}-t {G}9.00-9.01");
@@ -425,6 +424,31 @@ fn hash_inp(path: &Path) -> String {
     format!("{:x}", hasher.finish())
 }
 
+fn get_work_dir(args: &Args) -> Result<PathBuf, Xerr> {
+    if let Some(dir) = &args.temp_dir {
+        Ok(dir.clone())
+    } else {
+        let canon = args.inp.canonicalize()?;
+        let hash = hash_inp(&canon);
+        Ok(canon.with_file_name(format!(".{}", &hash[..7])))
+    }
+}
+
+fn ensure_writable_dir(path: &Path) -> Result<(), Xerr> {
+    create_dir_all(path)?;
+    let probe = path.join(".xav_write_test");
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&probe)
+        .map_err(|e| format!("Could not write to temp dir {}: {}", path.display(), e))?;
+    file.write_all(&[])?;
+    file.sync_all()?;
+    rm_file(probe)?;
+    Ok(())
+}
+
 fn save_args(work_dir: &Path) -> Result<(), Xerr> {
     let cmd: Vec<String> = env_args().collect();
     let quoted_cmd: Vec<String> = cmd
@@ -442,14 +466,7 @@ fn save_args(work_dir: &Path) -> Result<(), Xerr> {
 }
 
 fn get_saved_args(args: &Args) -> Result<Args, Xerr> {
-    let canonical = args.inp.canonicalize()?;
-    let hash = hash_inp(&canonical);
-    let work_dir = match &args.temp_dir {
-        Some(dir) => dir.clone(),
-        None => current_dir()
-            .map_err(|e| format!("Failed to get current directory: {}", e))?
-            .join(format!(".{}", &hash[..7])),
-    };
+    let work_dir = get_work_dir(args)?;
     let cmd_path = work_dir.join("cmd.txt");
 
     if cmd_path.exists() && get_resume(&work_dir).is_some_and(|r| !r.chnks_done.is_empty()) {
@@ -568,7 +585,7 @@ type AuHandle = JoinHandle<Result<AuResult, Xerr>>;
 
 fn spawn_au(args: &Args, work_dir: &Path, inf: &VidInf) -> Option<AuHandle> {
     (!args.sc_file.exists()
-    && !matches!(args.au.bitrate, AuBitrate::Passthrough)
+    && !matches!(args.au.mode, AuMode::Passthrough)
     && args.encoder != Avm).then(|| {
         let spec = args.au.clone();
         let inp = args.inp.clone();
@@ -628,16 +645,14 @@ fn main_with_args(args: &Args) -> Result<(), Xerr> {
     _ = stdout().flush();
     IN_ALT_SCREEN.store(true, Relaxed);
 
-    let canon_inp = args.inp.canonicalize()?;
-    let hash = hash_inp(&canon_inp);
-    let work_dir = match &args.temp_dir {
-        Some(dir) => dir.clone(),
-        None => current_dir()
-            .map_err(|e| format!("Failed to get current directory: {}", e))?
-            .join(format!(".{}", &hash[..7])),
+    let canon_inp = if args.temp_dir.is_none() || args.hwdec {
+        Some(args.inp.canonicalize()?)
+    } else {
+        None
     };
 
-    create_dir_all(&work_dir)?;
+    let work_dir = get_work_dir(args)?;
+    ensure_writable_dir(&work_dir)?;
 
     if get_resume(&work_dir).is_none_or(|r| r.chnks_done.is_empty()) {
         save_args(&work_dir)?;
@@ -651,7 +666,7 @@ fn main_with_args(args: &Args) -> Result<(), Xerr> {
 
     if args.hwdec {
         // Validate GPU codec support before attempting hardware decoding
-        validate_gpu_codec_support(&canon_inp, &inf)?;
+        validate_gpu_codec_support(canon_inp.as_ref().unwrap(), &inf)?;
     }
 
     if get_resume(&work_dir).is_none_or(|r| r.chnks_done.is_empty()) {
@@ -714,7 +729,7 @@ fn main_with_args(args: &Args) -> Result<(), Xerr> {
     let enc_time = enc_start.elapsed() + Dur::from_secs(prior_secs);
 
     let au_tracks = if let ref au_spec = args.au
-        && !matches!(au_spec.bitrate, AuBitrate::Passthrough)
+        && !matches!(au_spec.mode, AuMode::Passthrough)
         && args.encoder != Avm
     {
         acq_au(&au_spec, au_files, &args, &inf, &work_dir)?

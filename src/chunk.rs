@@ -15,7 +15,7 @@ use std::{
 };
 
 use crate::{
-    audio::{AuBitrate, AuSpec, AuStream, AuStreams, lang_name},
+    audio::{AuMode, AuSpec, AuStream, AuStreams, lang_name},
     encoder::{Encoder, Encoder::Avm},
     error::Xerr,
     ffms::{
@@ -70,17 +70,53 @@ pub struct ResumeInf {
 
 pub fn load_scenes(path: &Path, t_frames: usize) -> Result<Vec<Scene>, Xerr> {
     let content = read_to_str(path)?;
-    let mut parsed: Vec<_> = content
-        .lines()
-        .filter_map(|line| {
-            let t = line.trim();
-            let (f, r) = t.split_once(char::is_whitespace).unwrap_or((t, ""));
-            Some((
-                f.parse::<usize>().ok()?,
-                Some(r.trim()).filter(|s| !s.is_empty()).map(Box::from),
-            ))
-        })
-        .collect();
+    let mut parsed = Vec::new();
+
+    for line in content.lines() {
+        let t = line.trim();
+
+        let mut starts = Vec::new();
+        let mut params_idx = None;
+        let bytes = t.as_bytes();
+        let mut pos = 0;
+
+        while pos < bytes.len() {
+            while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+                pos += 1;
+            }
+            if pos == bytes.len() {
+                break;
+            }
+
+            let token_start = pos;
+            while pos < bytes.len() && !bytes[pos].is_ascii_whitespace() {
+                pos += 1;
+            }
+
+            if params_idx.is_some() {
+                continue;
+            }
+
+            let token = &t[token_start..pos];
+            match token.parse::<usize>() {
+                Ok(frame) => starts.push(frame),
+                Err(_) => params_idx = Some(token_start),
+            }
+        }
+
+        if starts.is_empty() {
+            continue;
+        }
+
+        let params = params_idx
+            .map(|idx| t[idx..].trim())
+            .filter(|s| !s.is_empty())
+            .map(Box::from);
+
+        for start in starts {
+            parsed.push((start, params.clone()));
+        }
+    }
 
     parsed.sort_unstable_by_key(|&(f, _)| f);
 
@@ -688,7 +724,7 @@ fn remux(
         octx,
         oformat,
         src_ctx,
-        matches!(au_spec.bitrate, AuBitrate::Passthrough) && ranges.is_none(),
+        matches!(au_spec.mode, AuMode::Passthrough) && ranges.is_none(),
         au_spec,
     );
     if ranges.is_none() && !src_ctx.is_null() {
