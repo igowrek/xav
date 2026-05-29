@@ -95,6 +95,7 @@ pub struct Args {
     pub sc_len: usize,
     pub hwdec: bool,
     pub temp_dir: Option<PathBuf>,
+    pub crop: Option<(i32, i32)>,
 }
 
 extern "C" fn restore() {
@@ -115,8 +116,8 @@ fn print_help() {
     println!("{C}-b {P}┃ {C}--buff       {W}Extra chunks to hold in front buffer");
     println!("{C}-s {P}┃ {C}--sc         {W}Specify SCD file. Auto gen if not specified");
     println!("{C}-r {P}┃ {C}--range      {W}Trim and splice frame ranges: {G}\"10-20,90-100\"");
-    println!("{C}-a {P}┃ {C}--audio      {W}Encode to Opus: {Y}-a {G}\"{R}<{G}auto{P}┃copy┃{G}norm{P}┃{G}<kbps>{R}> [all|<id1[,id2,...]>]\"");
-    println!("                  {B}Examples: {Y}-a {G}\"auto\"{W}, {Y}-a {G}\"copy\"{W}, {Y}-a {G}\"norm\"{W}, {Y}-a {G}\"128 1,2\"{W}, {Y}-a {G}\"norm(-16,-1.5,16,192) all\"");
+    println!("{C}-a {P}┃ {C}--audio      {W}Encode to Opus: {Y}-a {G}\"{R}<{G}auto{P}┃{G}copy{P}┃{G}norm{P}┃{G}<kbps>{R}> {B}[{G}all{P}┃{G}<id1>{B}[{W},{G}<id2>{W},{G}...{B}]]{G}\"");
+    println!("                  {B}Examples: {Y}-a {G}auto{W}, {Y}-a {G}copy{W}, {Y}-a {G}norm{W}, {Y}-a {G}\"128 1,2\"{W}, {Y}-a {G}\"norm(-16,-1.5,16,192) all\"");
     #[cfg(feature = "vship")]
     {
         println!("{C}-t {P}┃ {C}--tq         {W}TQ Range: {R}<8{B}={W}Butter5pn, {R}8-10{B}={W}CVVDP, {R}>10{B}={W}SSIMU2: {Y}-t {G}9.00-9.01");
@@ -131,6 +132,7 @@ fn print_help() {
     println!("   {P}┃ {C}--sc-group   {W}Generate a grouped SCD file");
     println!("   {P}┃ {C}--sc-len     {W}Maximum scene length in frames (default: 300)");
     println!("   {P}┃ {C}--temp-dir   {W}Set directory for temporary files");
+    println!("{C}-c {P}┃ {C}--crop       {W}Crop: {G}<x-axis>{B}[{P}:{G}<y-axis>{B}]");
 
     println!();
     println!("{P}Example:{W}");
@@ -142,6 +144,7 @@ fn print_help() {
     println!("  {C}-s {G}scd.txt          {P}\\  {B}# {W}Optionally use a scene file from external SCD tools");
     println!("  {C}-r {G}\"0-120,240-480\"  {P}\\  {B}# {W}Only encode given frame ranges and combine");
     println!("  {C}-a {G}\"norm 1,2\"       {P}\\  {B}# {W}Encode {R}2 {W}streams using Opus with stereo downmixing");
+    println!("  {C}-c {G}2:-1 {W}or {C}-c {G}2     {P}\\  {B}# {W}Crop {R}2px {W}from left and right, auto-detect vertical crop");
     #[cfg(feature = "vship")]
     {
         println!("  {C}-t {G}9.444-9.555      {P}\\  {B}# {W}Enable TQ mode with CVVDP using this allowed range");
@@ -271,7 +274,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
     let (mut worker, mut chnk_buf, mut sc_only, mut sc_group, mut hwdec) = (1usize, None, false, false, false);
     let (mut sc_file, mut inp, mut out) = (PathBuf::new(), PathBuf::new(), PathBuf::new());
     let (mut encoder, mut params) = (Encoder::default(), String::new());
-    let (mut au, mut ranges, mut temp_dir, mut sc_len) = (AuSpec::default(), None, None, 300usize);
+    let (mut au, mut ranges, mut temp_dir, mut sc_len, mut crop) = (AuSpec::default(), None, None, 300usize, None);
     #[cfg(feature = "vship")]
     let (mut tq, mut qp_range, mut cvvdp_conf, mut alt_param) = (
         None::<String>,
@@ -321,6 +324,20 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
             "--sc-only" => sc_only = true,
             "--sc-group" => sc_group = true,
             "--sc-len" => arg!(parse args, i, sc_len),
+            "-c" | "--crop" => {
+                if let Some(v) = next_arg(args, &mut i) {
+                    let parts: Vec<&str> = v.split(':').map(|c| c.trim()).collect();
+                    if parts.len() == 1 {
+                        if let Ok(ch) = parts[0].parse::<i32>() {
+                            crop = Some((-1, ch));
+                        }
+                    } else if parts.len() == 2 {
+                        if let (Ok(ch), Ok(cv)) = (parts[0].parse::<i32>(), parts[1].parse::<i32>()) {
+                            crop = Some((cv, ch));
+                        }
+                    }
+                }
+            }
             "--temp-dir" => arg!(opt_path args, i, temp_dir),
             "-h" | "--help" => {
                 print_help();
@@ -354,6 +371,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
         sc_len,
         hwdec,
         temp_dir,
+        crop,
         #[cfg(feature = "vship")]
         tq,
         #[cfg(feature = "vship")]
@@ -513,6 +531,42 @@ fn ensure_sc_file(args: &Args, inf: &VidInf, crop: (u32, u32), line: usize) -> R
         fd_scenes(&args.inp, &args.sc_file, args.sc_group, inf, crop, line, args.hwdec, args.sc_len)?;
     }
     Ok(())
+}
+
+fn get_crop(crop: Option<(i32, i32)>, inp: &Path, inf: &VidInf) -> Result<(u32, u32), Xerr> {
+    let (crop_v, crop_h) = if let Some((cv, ch)) = crop {
+        if cv < -1 || ch < -1 {
+            return Err("Crop values must be non-negative or -1".into());
+        } else if (cv % 2 != 0 || ch % 2 != 0) && cv != -1 && ch != -1 {
+            return Err("Crop values must be even".into());
+        } else if (cv * 2 + 2) >= inf.height as i32 || (ch * 2 + 2) >= inf.width as i32 {
+            return Err("Crop values are too large for the video dimensions".into());
+        }
+        (cv, ch)
+    } else {
+        (-1, -1)
+    };
+
+    if crop_v != -1 && crop_h != -1 {
+        Ok((crop_v as u32, crop_h as u32))
+    } else {
+        let thr = unsafe { available_parallelism().unwrap_unchecked().get() as i32 };
+        let conf = CropConf {
+            sample_cnt: 13,
+            min_black_pix: 2,
+        };
+        let (mut cv, mut ch) = match detect_crop(&inp, &inf, &conf, thr, 1) {
+            Ok(detected) if detected.has_crop() => detected.to_tuple(),
+            _ => (0, 0),
+        };
+        if crop_v != -1 {
+            cv = crop_v as u32;
+        }
+        if crop_h != -1 {
+            ch = crop_h as u32;
+        }
+        Ok((cv, ch))
+    }
 }
 
 const fn scale_crop(
@@ -675,15 +729,7 @@ fn main_with_args(args: &Args) -> Result<(), Xerr> {
 
     let au_handle = spawn_au(args, &work_dir, &inf);
 
-    let thr = unsafe { available_parallelism().unwrap_unchecked().get() as i32 };
-    let conf = CropConf {
-        sample_cnt: 13,
-        min_black_pix: 2,
-    };
-    let crop = match detect_crop(&args.inp, &inf, &conf, thr, 1) {
-        Ok(detected) if detected.has_crop() => detected.to_tuple(),
-        _ => (0, 0),
-    };
+    let crop = get_crop(args.crop, &args.inp, &inf)?;
 
     let au_files = scd_and_au(args, &inf, crop, au_handle)?;
 
