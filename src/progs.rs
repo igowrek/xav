@@ -21,7 +21,7 @@ use crate::{
     ffms::VidInf,
 };
 
-const BAR_WIDTH: usize = 20;
+const BAR_WIDTH: usize = 12;
 const INTERVAL_MS: u64 = 500;
 const READ_CAP: usize = 8192;
 
@@ -67,29 +67,50 @@ impl fmt::Write for Line {
     }
 }
 
+fn write_fps(w: &mut impl fmt::Write, fps: f32, suffix: &str) {
+    if fps > 99.99 {
+        _ = write!(w, "{Y}{fps:4.0}{suffix}");
+    } else if fps > 9.99 {
+        _ = write!(w, "{Y}{fps:4.1}{suffix}");
+    } else {
+        _ = write!(w, "{Y}{fps:4.2}{suffix}");
+    }
+}
+
 fn write_el(w: &mut impl fmt::Write, h: usize, m: usize) {
-    _ = write!(w, "{W}{h:02}{P}:{W}{m:02} ");
+    _ = write!(w, "{W}{h:02}{P}:{W}{m:02}");
 }
 
 fn write_eta(w: &mut impl fmt::Write, h: usize, m: usize) {
-    _ = write!(w, "{C}, {W}-{h:02}{P}:{W}{m:02}");
+    _ = write!(w, "{P}<{W}{h:02}{P}:{W}{m:02}");
 }
 
 fn write_tag(w: &mut impl fmt::Write, idx: u16, cs: Option<(f32, Option<f32>)>) {
     match cs {
-        Some((c, Some(s))) => _ = write!(w, "{C}[{idx:04} / F {c:5.2} / {s:5.2}{C}]"),
-        Some((c, None)) => _ = write!(w, "{C}[{idx:04} / F {c:5.2} / {:5}{C}]", ""),
-        None => _ = write!(w, "{C}[{idx:04}{C}]"),
+        Some((c, Some(s))) => if s > 9.999 {
+            _ = write!(w, "{W}[{C}{idx:04}{W}|{C}f{c:5.2}{W}|{C}{s:4.1}{W}]")
+        } else {
+            _ = write!(w, "{W}[{C}{idx:04}{W}|{C}f{c:5.2}{W}|{C}{s:4.2}{W}]")
+        },
+        Some((c, None)) => _ = write!(w, "{W}[{C}{idx:04}{W}|{C}f{c:5.2}{W}|{C}{:.>4}{W}]", ""),
+        None => _ = write!(w, "{W}[{C}{idx:04}{W}]"),
     }
 }
 
-fn write_bar(w: &mut impl fmt::Write, filled: usize, hash: &str, dash: &str) {
+fn write_bar(w: &mut impl fmt::Write, perc: usize, filled: usize, br_color: &str, hash: &str, dash: &str) {
+    if perc < 100 {
+        _ = write!(w, "{br_color}[{W}{perc:2}%{br_color}]");
+    } else {
+        _ = write!(w, "{br_color}[{W}DON{br_color}]");
+    }
+    _ = write!(w, "{br_color}[");
     for _ in 0..filled {
         _ = w.write_str(hash);
     }
     for _ in filled..BAR_WIDTH {
         _ = w.write_str(dash);
     }
+    _ = write!(w, "{br_color}] ");
 }
 
 pub struct ProgsBar {
@@ -116,9 +137,7 @@ impl ProgsBar {
 
         self.tot = tot;
         let elapsed = self.start.elapsed().as_secs() as usize;
-        let fps = current / elapsed.max(1);
-        let remaining = tot.saturating_sub(current);
-        let eta_secs = remaining * elapsed / current.max(1);
+        let fps = current as f32 / elapsed.max(1) as f32;
         let filled = (BAR_WIDTH * current / tot.max(1)).min(BAR_WIDTH);
         let perc = (current * 100 / tot.max(1)).min(100);
 
@@ -128,12 +147,10 @@ impl ProgsBar {
         } else {
             _ = write!(l, "\r\x1b[2K");
         }
-        write_el(&mut l, elapsed / 3600, (elapsed % 3600) / 60);
-        _ = write!(l, "{W}{label}: {C}[");
-        write_bar(&mut l, filled, G_HASH, R_DASH);
-        _ = write!(l, "{C}] {W}{perc}%{C}, {Y}{fps} FPS");
-        write_eta(&mut l, eta_secs / 3600, (eta_secs % 3600) / 60);
-        _ = write!(l, "{C}, {G}{current}{C}/{R}{tot}{N}");
+        _ = write!(l, "{W}{label}: ");
+        write_bar(&mut l, perc, filled, C, G_HASH, R_DASH);
+        write_fps(&mut l, fps, " fps ");
+        _ = write!(l, "{G}{current}{C}/{R}{tot}{N}");
         print!("{}", l.as_str());
         _ = io_stdout().flush();
     }
@@ -147,11 +164,11 @@ impl ProgsBar {
         self.tot = tot;
         let elapsed = self.start.elapsed().as_secs() as usize;
         let spd = current as f32 / elapsed.max(1) as f32 / 48000.0;
-        let remaining = tot.saturating_sub(current);
-        let eta_secs = remaining * elapsed / current.max(1);
         let filled = (BAR_WIDTH * current / tot.max(1)).min(BAR_WIDTH);
         let perc = (current * 100 / tot.max(1)).min(100);
+        let cur = current / 48000;
         let dur = tot / 48000;
+        let (ch, cm, cs) = (cur / 3600, (cur % 3600) / 60, cur % 60);
         let (dh, dm, ds) = (dur / 3600, (dur % 3600) / 60, dur % 60);
 
         let mut l = Line::new();
@@ -160,13 +177,12 @@ impl ProgsBar {
         } else {
             _ = write!(l, "\r\x1b[2K");
         }
-        _ = write!(l, "{C}[{W}{track_id:02}{C}] ");
-        write_el(&mut l, elapsed / 3600, (elapsed % 3600) / 60);
-        _ = write!(l, "{W}AU P{pass}: {C}[");
-        write_bar(&mut l, filled, G_HASH, R_DASH);
-        _ = write!(l, "{C}] {W}{perc}%{C}, {Y}{spd:.1}x");
-        write_eta(&mut l, eta_secs / 3600, (eta_secs % 3600) / 60);
-        _ = write!(l, "{C}, {G}{dh:02}{P}:{G}{dm:02}{P}:{G}{ds:02}{N}");
+        _ = write!(l, "{C}[{track_id:02}] ");
+        _ = write!(l, "{W}AU P{pass}: ");
+        write_bar(&mut l, perc, filled, C, G_HASH, R_DASH);
+        write_fps(&mut l, spd, "x ");
+        _ = write!(l, "{G}{ch}:{cm:02}:{cs:02}{C}/");
+        _ = write!(l, "{R}{dh}:{dm:02}:{ds:02}{N}");
         print!("{}", l.as_str());
         _ = io_stdout().flush();
     }
@@ -287,13 +303,13 @@ impl ProgsTrack {
         let perc = (current * 100 / tot.max(1)).min(100);
 
         let mut line = Line::new();
-        write_tag(&mut line, chnk_idx, Some(crf_score));
-        _ = write!(line, " [");
-        write_bar(&mut line, filled, G_HASH, R_DASH);
+        write_bar(&mut line, perc, filled, C, G_HASH, R_DASH);
+        write_fps(&mut line, fps, " ");
         _ = write!(
             line,
-            "{C}] {W}{perc:3}%{C}, {Y}{fps:6.2}{C}, {G}{current:3}{C}/{R}{tot:<3}"
+            " {G}{current:3}{C}/{R}{tot:<3} "
         );
+        write_tag(&mut line, chnk_idx, Some(crf_score));
 
         self.inner.put(worker_id, line);
     }
@@ -309,16 +325,16 @@ impl ProgsTrack {
     ) {
         let (current, tot) = progs;
         let filled = (BAR_WIDTH * current / tot.max(1)).min(BAR_WIDTH);
-        let perc = (current * 100 / tot.max(1)).min(100);
 
         let mut line = Line::new();
-        write_tag(&mut line, chnk_idx, crf_score);
-        _ = write!(line, " {P}[");
-        write_bar(&mut line, filled, B_HASH, Y_DASH);
+        let perc = (current * 100 / tot.max(1)).min(100);
+        write_bar(&mut line, perc, filled, P, B_HASH, Y_DASH);
+        write_fps(&mut line, fps, " ");
         _ = write!(
             line,
-            "{P}] {W}{perc:3}%{C}, {Y}{fps:6.2}{C}, {G}{current:3}{C}/{R}{tot:<3}"
+            " {G}{current:3}{C}/{R}{tot:<3} "
         );
+        write_tag(&mut line, chnk_idx, crf_score);
 
         if let Some(d) = frames_delta {
             self.inner.processed.fetch_add(d, Relaxed);
@@ -421,13 +437,10 @@ fn watch_avm(inner: &Shared, rd: impl Read, w: Watch) {
             let perc = (poc_cnt * 100 / tot.max(1)).min(100);
 
             let mut line = Line::new();
+            write_bar(&mut line, perc, filled, P, B_HASH, Y_DASH);
+            write_fps(&mut line, fps, " ");
+            _ = write!(line, "{G}{poc_cnt:3}{C}/{R}{tot:<3}");
             write_tag(&mut line, chnk_idx, crf_score);
-            _ = write!(line, " {P}[");
-            write_bar(&mut line, filled, B_HASH, Y_DASH);
-            _ = write!(
-                line,
-                "{P}] {W}{perc:3}%{C}, {Y}{fps:6.2}{C}, {G}{poc_cnt:3}{C}/{R}{tot:<3}"
-            );
 
             if track_frames {
                 let d = poc_cnt.saturating_sub(last_poc);
@@ -528,13 +541,10 @@ fn watch_vvenc(inner: &Shared, rd: impl Read, w: Watch) {
             let perc = (poc_cnt * 100 / tot.max(1)).min(100);
 
             let mut line = Line::new();
+            write_bar(&mut line, perc, filled, P, B_HASH, Y_DASH);
+            write_fps(&mut line, fps, " ");
+            _ = write!(line, "{G}{poc_cnt:3}{C}/{R}{tot:<3}");
             write_tag(&mut line, chnk_idx, crf_score);
-            _ = write!(line, " {P}[");
-            write_bar(&mut line, filled, B_HASH, Y_DASH);
-            _ = write!(
-                line,
-                "{P}] {W}{perc:3}%{C}, {Y}{fps:6.2}{C}, {G}{poc_cnt:3}{C}/{R}{tot:<3}"
-            );
 
             if track_frames {
                 let d = poc_cnt.saturating_sub(last_poc);
@@ -595,13 +605,10 @@ fn watch_x265(inner: &Shared, rd: impl Read, w: Watch) {
             let perc = cur * 100 / frames.max(1);
 
             let mut line = Line::new();
+            write_bar(&mut line, perc, filled, P, B_HASH, Y_DASH);
+            write_fps(&mut line, fps, " ");
+            _ = write!(line, "{Y}{cur:3}/{frames:3} {W}| {P}{kbps:.0} kb/s");
             write_tag(&mut line, chnk_idx, crf_score);
-            _ = write!(line, " {P}[");
-            write_bar(&mut line, filled, B_HASH, Y_DASH);
-            _ = write!(
-                line,
-                "{P}] {W}{perc:3}% {Y}{cur:3}/{frames:3} {G}{fps:6.2} {W}| {P}{kbps:.0} kb/s"
-            );
 
             if track_frames {
                 let d = cur.saturating_sub(last_frames);
@@ -675,35 +682,39 @@ fn draw_screen(s: &Shared) {
 
     let mut agg = Line::new();
     _ = write!(agg, "\r\x1b[2K");
-    write_el(&mut agg, elapsed_secs / 3600, (elapsed_secs % 3600) / 60);
-    _ = write!(agg, "{C}[{G}{chnks_done}{C}/{R}{}{C}] [", s.tot_chnks);
-    write_bar(&mut agg, progs, G_HASH, R_DASH);
-    _ = write!(
-        agg,
-        "{C}] {W}{perc}% {G}{frames_done}{C}/{R}{} {C}({Y}{fps:.2}",
-        s.tot_frames
-    );
-    if eta_secs >= 99 * 3600 {
-        _ = write!(agg, "{C}, {W}-99:99");
-    } else {
-        write_eta(&mut agg, eta_secs / 3600, (eta_secs % 3600) / 60);
-    }
-    _ = write!(agg, "{C}, ");
+    write_bar(&mut agg, perc, progs, C, G_HASH, R_DASH);
+    write_fps(&mut agg, fps, " ");
+    _ = write!(agg, "{G}{frames_done}{C}/{R}{} ",s.tot_frames);
+    _ = write!(agg, "{W}[{C}{chnks_done}{W}/{C}{}{W}] ", s.tot_chnks);
     if completed_frames > 0 {
         let dur = completed_frames as f32 * s.fps_den as f32 / s.fps_num as f32;
         let kbps = tot_sz as f32 * 8.0 / dur / 1000.0;
         let tot_dur = s.tot_frames as f32 * s.fps_den as f32 / s.fps_num as f32;
         let est_sz = kbps * tot_dur * 1000.0 / 8.0;
-        _ = write!(agg, "{B}{kbps:.0}k{C}, ");
-        if est_sz > 1_000_000_000.0 {
-            _ = write!(agg, "{R}{:.1}g", est_sz / 1_000_000_000.0);
+        _ = write!(agg, "{B}{kbps:.0}k {C}({R}");
+        if est_sz > 9_999_999_999.99 {
+            _ = write!(agg, "{:.1} GB", est_sz / 1_000_000_000.0);
+        } else if est_sz > 999_999_999.99 {
+            _ = write!(agg, "{:.2} GB", est_sz / 1_000_000_000.0);
+        } else if est_sz > 99_999_999.99 {
+            _ = write!(agg, "{:.0} MB", est_sz / 1_000_000.0);
+        } else if est_sz > 9_999_999.99 {
+            _ = write!(agg, "{:.1} MB", est_sz / 1_000_000.0);
         } else {
-            _ = write!(agg, "{R}{:.1}m", est_sz / 1_000_000.0);
+            _ = write!(agg, "{:.2} MB", est_sz / 1_000_000.0);
         }
+        _ = write!(agg, "{C}) ");
     } else {
-        _ = write!(agg, "{B}0k{C}, {R}0m");
+        _ = write!(agg, "{B}0.00k {C}({R}0.00 MB{C}) ");
     }
-    _ = writeln!(agg, "{C}{N})");
+    write_el(&mut agg, elapsed_secs / 3600, (elapsed_secs % 3600) / 60);
+    _ = write!(agg, "{C}");
+    if eta_secs >= 99 * 3600 {
+        _ = write!(agg, "{P}<{W}XX{P}:{W}XX");
+    } else {
+        write_eta(&mut agg, eta_secs / 3600, (eta_secs % 3600) / 60);
+    }
+    _ = writeln!(agg, "{N}");
     print!("{}", agg.as_str());
     _ = io_stdout().flush();
 }
