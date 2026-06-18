@@ -45,7 +45,9 @@ const AV_DICT_IGNORE_SUFFIX: c_int = 2;
 const AV_FRAME_DATA_MASTERING_DISPLAY_METADATA: c_int = 11;
 const AV_FRAME_DATA_CONTENT_LIGHT_LEVEL: c_int = 14;
 const AV_PIX_FMT_YUV420P10LE: c_int = 62;
+const AV_HWDEVICE_TYPE_CUDA: c_int = 2;
 const AV_HWDEVICE_TYPE_VULKAN: c_int = 11;
+const AV_CODEC_ID_VC1: c_int = 70;
 const AV_CODEC_ID_AV1: c_int = 225;
 const HW_DEVICE_CTX_OFFSET: usize = 560;
 pub const AV_CODEC_ID_DVD_SUBTITLE: c_int = 94208;
@@ -534,23 +536,10 @@ impl VidDecoder {
 
     pub fn new_hw(path: &Path, threads: i32) -> Result<Self, Xerr> {
         unsafe {
-            let mut hw_device_ctx: *mut c_void = null_mut();
-            if av_hwdevice_ctx_create(
-                addr_of_mut!(hw_device_ctx),
-                AV_HWDEVICE_TYPE_VULKAN,
-                null(),
-                null_mut(),
-                0,
-            ) < 0
-            {
-                return Err(ff_err("hwdec: vulkan device creation failed"));
-            }
-
             let cpath = CString::new(path.to_str().unwrap_unchecked()).unwrap_unchecked();
             let mut fmt_ctx: *mut AVFormatContext = null_mut();
 
             if avformat_open_input(addr_of_mut!(fmt_ctx), cpath.as_ptr(), null(), null_mut()) < 0 {
-                av_buffer_unref(addr_of_mut!(hw_device_ctx));
                 return Err(ff_err("decoder: open failed"));
             }
 
@@ -561,12 +550,29 @@ impl VidDecoder {
                 av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, addr_of_mut!(dec), 0);
             if idx < 0 {
                 avformat_close_input(addr_of_mut!(fmt_ctx));
-                av_buffer_unref(addr_of_mut!(hw_device_ctx));
                 return Err(ff_err("decoder: no video stream"));
             }
 
             let stream = *(*fmt_ctx).streams.add(idx as usize);
             let par = &*(*stream).codecpar;
+
+            let hw_type = if par.codec_id == AV_CODEC_ID_VC1 {
+                AV_HWDEVICE_TYPE_CUDA
+            } else {
+                AV_HWDEVICE_TYPE_VULKAN
+            };
+
+            let mut hw_device_ctx: *mut c_void = null_mut();
+            if av_hwdevice_ctx_create(
+                addr_of_mut!(hw_device_ctx),
+                hw_type,
+                null(),
+                null_mut(),
+                0,
+            ) < 0 {
+                avformat_close_input(addr_of_mut!(fmt_ctx));
+                return Err(ff_err("hwdec: device creation failed"));
+            }
 
             if par.codec_id == AV_CODEC_ID_AV1 {
                 let native = avcodec_find_decoder_by_name(c"av1".as_ptr());
@@ -574,6 +580,13 @@ impl VidDecoder {
                     dec = native;
                 }
             }
+
+            if par.codec_id == AV_CODEC_ID_VC1 {
+                let cuvid = avcodec_find_decoder_by_name(c"vc1_cuvid".as_ptr());
+                if !cuvid.is_null() {
+                    dec = cuvid;
+                }
+             }
 
             let (ts_mul, ts_div) = ts_factors((*stream).time_base, (*stream).avg_frame_rate);
             let start_pts = (*stream).start_time.max(0);

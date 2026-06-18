@@ -18,8 +18,11 @@ install_deps() {
 
         case "${pm}" in
                 "pacman")
-                        pkgs=(base-devel rustup nasm clang compiler-rt cmake llvm lld ninja meson ffmpeg curl)
-                        ${priv:-} pacman -S --needed --noconfirm "${pkgs[@]}"
+                        pkgs=(
+                                cmake base-devel rustup nasm clang compiler-rt
+                                llvm lld ninja meson ffmpeg curl ffnvcodec-headers
+                        )
+                        ${priv:-} pacman -S --needed --noconfirm --ask 4 "${pkgs[@]}"
                         ;;
                 "dnf")
                         pkgs=(
@@ -277,12 +280,17 @@ show_build_menu() {
         detect_deps
         [[ ! " ${ELIGIBLE[*]} " =~ " true " ]] && install_deps && detect_deps
 
-        for i in cargo ffmpeg clang pkgconf ninja meson cmake; do
-                command -v "${i}" > /dev/null 2>&1 || {
-                        echo "Missing from PATH: ${i}"
-                        echo "You should restart your terminal to update PATH"
-                        exit 1
-                }
+        for tool in cargo ffmpeg clang pkgconf ninja meson cmake; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+                echo "Missing: $tool - installing..."
+
+                install_deps "$tool"
+
+                if ! command -v "$tool" >/dev/null 2>&1; then
+                echo "ERROR: $tool still missing after install"
+                exit 1
+                fi
+            fi
         done
 
         cargo clean > /dev/null 2>&1
@@ -639,6 +647,9 @@ build_ffmpeg() {
                 --enable-hwaccel=av1_vulkan \
                 --enable-bsf=extract_extradata \
                 --enable-demuxer=ogg \
+                --enable-ffnvcodec \
+                --enable-nvdec \
+                --enable-hwaccel=vc1_nvdec \
                 --enable-hwaccel=vp9_vulkan >> "${logfile}" 2>&1
 
         make -j"$(nproc)" >> "${logfile}" 2>&1
