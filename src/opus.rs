@@ -78,7 +78,7 @@ pub struct Encoder {
 }
 
 impl Encoder {
-    pub fn new(path: &Path, channels: u8, brate: u16, family: c_int) -> Result<Self, Xerr> {
+    pub fn new(path: &Path, channels: u8, br: u16, family: c_int) -> Result<Self, Xerr> {
         let c_path = unsafe { CString::new(path.to_str().unwrap_unchecked()).unwrap_unchecked() };
 
         let comments = unsafe { ope_comments_create() };
@@ -107,7 +107,7 @@ impl Encoder {
             check(ope_encoder_ctl(
                 ptr,
                 OPUS_SET_BITRATE_REQUEST,
-                c_int::from(brate) * 1000,
+                c_int::from(br) * 1000,
             ))?;
             check(ope_encoder_ctl(ptr, OPUS_SET_VBR_REQUEST, 1i32))?;
             check(ope_encoder_ctl(ptr, OPUS_SET_VBR_CONSTRAINT_REQUEST, 0i32))?;

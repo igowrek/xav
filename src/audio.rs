@@ -8,7 +8,7 @@ use ebur128::{EbuR128, Mode};
 
 use crate::{
     audio::{
-        AuBrate::{Auto, Fixed, Norm},
+        AuMode::{Auto, Passthru, Bitrate, Norm},
         AuStreams::{All, Specific},
     },
     error::{Xerr, Xerr::Msg},
@@ -23,7 +23,7 @@ pub struct NormParams {
     pub i: f32,
     pub tp: f32,
     pub lra: f32,
-    pub brate: u16,
+    pub br: u16,
 }
 
 impl NormParams {
@@ -32,29 +32,33 @@ impl NormParams {
             i: -16.0,
             tp: -1.5,
             lra: 16.0,
-            brate: 128,
+            br: 128,
         }
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 #[non_exhaustive]
-pub enum AuBrate {
+pub enum AuMode {
+    #[default]
     Auto,
-    Fixed(u16),
+    Passthru,
+    Bitrate(u16),
     Norm(NormParams),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 #[non_exhaustive]
 pub enum AuStreams {
+    #[default]
+    NoAudio,
     All,
     Specific(Vec<u8>),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct AuSpec {
-    pub brate: AuBrate,
+    pub mode: AuMode,
     pub streams: AuStreams,
 }
 
@@ -74,44 +78,52 @@ fn parse_norm(s: &str) -> Result<NormParams, Xerr> {
         .strip_prefix("norm(")
         .and_then(|r| r.strip_suffix(')'))
         .ok_or("norm format: norm or norm(I,TP,LRA[,BITRATE])")?;
-    let (i, tp, lra, brate) = match *inner.split(',').collect::<Vec<_>>() {
+    let (i, tp, lra, br) = match *inner.split(',').collect::<Vec<_>>() {
         [i, tp, lra] => (i, tp, lra, "128"),
-        [i, tp, lra, b] => (i, tp, lra, b),
+        [i, tp, lra, br] => (i, tp, lra, br),
         _ => return Err("norm format: norm(I,TP,LRA[,BITRATE]) e.g. norm(-16,-1.5,16,192)".into()),
     };
     Ok(NormParams {
         i: i.parse()?,
         tp: tp.parse()?,
         lra: lra.parse()?,
-        brate: brate.parse()?,
+        br: br.parse()?,
     })
 }
 
 pub fn parse_au_arg(arg: &str) -> Result<AuSpec, Xerr> {
     let parts: Vec<&str> = arg.split_whitespace().collect();
-    if parts.len() != 2 {
-        return Err("Audio format: -a <auto|norm|norm(I,TP,LRA)|brate> <all|stream_ids>".into());
-    }
-
-    Ok(AuSpec {
-        brate: if parts[0] == "auto" {
-            Auto
-        } else if parts[0].starts_with("norm") {
-            Norm(parse_norm(parts[0])?)
-        } else {
-            Fixed(parts[0].parse()?)
-        },
-        streams: if parts[1] == "all" {
-            All
-        } else {
-            Specific(
-                parts[1]
-                    .split(',')
-                    .map(str::parse)
-                    .collect::<Result<_, _>>()?,
+    let (mode_arg, streams_arg) = match parts.as_slice() {
+        [s] => (*s, "all"),
+        [s, stream] => (*s, *stream),
+        _ => {
+            return Err(
+                "Audio format: -a \"<auto|copy|norm|norm(I,TP,LRA)|<kbps>> [all|<id1[,id2,...]>]\""
+                    .into(),
             )
-        },
-    })
+        }
+    };
+
+    let mode = match mode_arg {
+        "auto" => Auto,
+        "copy" => Passthru,
+        s if s.starts_with("norm") => Norm(parse_norm(s)?),
+        s => Bitrate(s.parse()?),
+    };
+
+    let streams = if streams_arg == "all" {
+        All
+    } else {
+        Specific(
+            streams_arg
+                .split(',')
+                .map(str::parse)
+                .collect::<Result<_, _>>()
+                .map_err(|e| format!("Invalid stream id in '{}': {}", streams_arg, e))?,
+        )
+    };
+
+    Ok(AuSpec {mode, streams})
 }
 
 fn get_streams(inp: &Path) -> Result<Vec<AuStream>, Xerr> {
@@ -182,7 +194,7 @@ fn downmix_chnk(src: &[f32], dst: &mut [f32], ch: usize, n: usize) {
 fn enc_direct(
     inp: &Path,
     stream: &AuStream,
-    brate: u16,
+    br: u16,
     out: &Path,
     samp_ranges: Option<&[(i64, i64)]>,
     progs_line: usize,
@@ -198,7 +210,7 @@ fn enc_direct(
     } else {
         FAMILY_SURROUND
     };
-    let mut enc = Encoder::new(out, ch as u8, brate, family)?;
+    let mut enc = Encoder::new(out, ch as u8, br, family)?;
     let mut progs = ProgsBar::new();
     let mut enced: i64 = 0;
     let tid = stream.index;
@@ -298,7 +310,7 @@ fn enc_norm(
     let tp_limit = 10f32.powf(np.tp / 20.0);
 
     let mut dec2 = AuDecoder::new(inp, i32::from(stream.index))?;
-    let mut enc = Encoder::new(out, 2, np.brate, FAMILY_MONO_STEREO)?;
+    let mut enc = Encoder::new(out, 2, np.br, FAMILY_MONO_STEREO)?;
     let mut stereo = vec![0f32; 96000 * 2];
     let mut progs = ProgsBar::new();
     let mut enced: i64 = 0;
@@ -332,7 +344,7 @@ fn enc_norm(
 struct TrackJob {
     stream: AuStream,
     do_norm: bool,
-    brate: u16,
+    br: u16,
     path: PathBuf,
     line: usize,
 }
@@ -344,14 +356,18 @@ pub fn enc_au_streams(
     samp_ranges: Option<&[(i64, i64)]>,
     progs_line: usize,
 ) -> Result<Vec<(AuStream, PathBuf)>, Xerr> {
+    if matches!(spec.streams, AuStreams::NoAudio) {
+        return Ok(Vec::new());
+    }
     let all = get_streams(inp)?;
     let sel: Vec<_> = match spec.streams {
+        AuStreams::NoAudio => Vec::new(),
         AuStreams::All => all.iter().collect(),
         AuStreams::Specific(ref ids) => all.iter().filter(|s| ids.contains(&s.index)).collect(),
     };
 
-    let norm_params = match spec.brate {
-        AuBrate::Norm(p) => Some(p),
+    let norm_params = match spec.mode {
+        AuMode::Norm(p) => Some(p),
         _ => None,
     };
 
@@ -361,9 +377,9 @@ pub fn enc_au_streams(
         .map(|(i, s)| {
             let np = norm_params.filter(|_| s.channels > 2);
             let do_norm = np.is_some();
-            let brate = np.map_or_else(
-                || match spec.brate {
-                    AuBrate::Auto | AuBrate::Norm(_) => {
+            let br = np.map_or_else(
+                || match spec.mode {
+                    AuMode::Auto | AuMode::Norm(_) => {
                         let cc = match s.channels {
                             1 => 1.0,
                             2 => 2.0,
@@ -377,16 +393,17 @@ pub fn enc_au_streams(
                         };
                         (128.0 * (cc / 2.0f32).powf(0.75)) as u16
                     }
-                    AuBrate::Fixed(b) => b,
+                    AuMode::Bitrate(b) => b,
+                    AuMode::Passthru => 0
                 },
-                |p| p.brate,
+                |p| p.br,
             );
             let mut stream = (*s).clone();
-            stream.bitrate = brate;
+            stream.bitrate = br;
             TrackJob {
                 stream,
                 do_norm,
-                brate,
+                br,
                 path: work_dir.join(format!(
                     "{}_{:02}.opus",
                     s.lang.as_deref().unwrap_or("und"),
@@ -406,7 +423,7 @@ pub fn enc_au_streams(
                     {
                         enc_norm(inp, &j.stream, &j.path, samp_ranges, np, j.line)?;
                     } else {
-                        enc_direct(inp, &j.stream, j.brate, &j.path, samp_ranges, j.line)?;
+                        enc_direct(inp, &j.stream, j.br, &j.path, samp_ranges, j.line)?;
                     }
                     Ok::<_, Xerr>((j.stream.clone(), j.path.clone()))
                 })

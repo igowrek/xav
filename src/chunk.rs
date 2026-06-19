@@ -12,7 +12,7 @@ use std::{
 
 use crate::{
     Args,
-    audio::AuStream,
+    audio::{AuStream, AuMode},
     copy::{demux, read_chapters},
     encoder::Encoder::Avm,
     error::Xerr,
@@ -250,11 +250,11 @@ pub fn merge_out(
     } else {
         Vec::new()
     };
-    let copy_audio = au.is_empty() && want_extras;
+    let copy_audio = au.is_empty() && want_extras && matches!(args.au.mode, AuMode::Passthru);
     let (audio, subs) = if want_extras {
         println!();
         _ = stdout().flush();
-        let streams = demux(src, copy_audio, true)?;
+        let streams = demux(src, copy_audio, true, &args.au.streams)?;
         if copy_audio {
             let (au_s, sub_s): (Vec<_>, Vec<_>) = streams
                 .into_iter()

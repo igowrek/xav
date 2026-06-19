@@ -48,6 +48,9 @@ const AV_PIX_FMT_YUV420P10LE: c_int = 62;
 const AV_HWDEVICE_TYPE_VULKAN: c_int = 11;
 const AV_CODEC_ID_AV1: c_int = 225;
 const HW_DEVICE_CTX_OFFSET: usize = 560;
+pub const AV_CODEC_ID_DVD_SUBTITLE: c_int = 94208;
+pub const AV_CODEC_ID_DVB_SUBTITLE: c_int = 94209;
+pub const AV_CODEC_ID_HDMV_PGS_SUBTITLE: c_int = 94214;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
