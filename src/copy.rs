@@ -7,17 +7,13 @@ use std::{
 };
 
 use crate::{
-    byte_range::ByteRange,
-    error::Xerr,
-    ffms::{
+    audio::AuStreams, byte_range::ByteRange, error::Xerr, ffms::{
+        AV_CODEC_ID_DVD_SUBTITLE, AV_CODEC_ID_DVB_SUBTITLE, AV_CODEC_ID_HDMV_PGS_SUBTITLE,
         AV_NOPTS_VALUE, AVCodecParameters, AVFormatContext, AVMEDIA_TYPE_AUDIO,
         AVMEDIA_TYPE_SUBTITLE, AVMEDIA_TYPE_VIDEO, AVStream, av_packet_alloc, av_packet_free,
         av_packet_unref, av_read_frame, avcodec_get_name, avformat_close_input,
         avformat_find_stream_info, avformat_open_input, dict_get, is_matroska, stream_lang,
-    },
-    mkv::read::{chapter_langs, track_langs},
-    platform::Mmap,
-    progs::ProgsBar,
+    }, mkv::read::{chapter_langs, track_langs}, platform::Mmap, progs::ProgsBar
 };
 
 pub struct Packet {
@@ -48,7 +44,7 @@ pub struct Chapter {
     pub lang: Option<Cow<'static, str>>,
 }
 
-pub fn demux(inp: &Path, want_audio: bool, want_subs: bool) -> Result<Vec<Stream>, Xerr> {
+pub fn demux(inp: &Path, want_audio: bool, want_subs: bool, pt_streams: &AuStreams) -> Result<Vec<Stream>, Xerr> {
     unsafe {
         let path = CString::new(inp.to_str().unwrap_unchecked()).unwrap_unchecked();
         let mut fmt_ctx: *mut AVFormatContext = null_mut();
@@ -71,8 +67,20 @@ pub fn demux(inp: &Path, want_audio: bool, want_subs: bool) -> Result<Vec<Stream
         for (i, route) in routes.iter_mut().enumerate() {
             let st = *(*fmt_ctx).streams.add(i);
             let par = &*(*st).codecpar;
-            let want = (par.codec_type == AVMEDIA_TYPE_AUDIO && want_audio)
-                || (par.codec_type == AVMEDIA_TYPE_SUBTITLE && want_subs);
+            let want =
+                (par.codec_type == AVMEDIA_TYPE_AUDIO
+                    && want_audio
+                    && match &pt_streams{
+                        AuStreams::NoAudio => false,
+                        AuStreams::All => true,
+                        AuStreams::Specific(list) => list.contains(&(i as u8))
+                    }
+                )
+                || (par.codec_type == AVMEDIA_TYPE_SUBTITLE && want_subs  && !matches!(
+                    par.codec_id,
+                    AV_CODEC_ID_HDMV_PGS_SUBTITLE
+                    | AV_CODEC_ID_DVD_SUBTITLE
+                    | AV_CODEC_ID_DVB_SUBTITLE));
             if want {
                 *route = Some(streams.len());
                 let mut s = describe(st, par, origin_us);

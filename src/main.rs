@@ -66,7 +66,7 @@ mod vship;
 mod worker;
 mod y4m;
 
-use audio::{AuSpec, AuStream, enc_au_streams, frame_samp, parse_au_arg};
+use audio::{AuSpec, AuMode, AuStream, enc_au_streams, frame_samp, parse_au_arg};
 use chunk::{
     Chunk, Scene, chnkify, get_resume, init_elapsed, load_scenes, merge_out, trans_scenes,
     val_scenes,
@@ -94,7 +94,7 @@ pub struct Args {
     pub worker: usize,
     pub sc_file: PathBuf,
     pub params: String,
-    pub au: Option<AuSpec>,
+    pub au: AuSpec,
     pub inp: PathBuf,
     pub out: PathBuf,
     pub dec_strat: Option<DecStrat>,
@@ -139,7 +139,7 @@ fn print_help() {
     println!("   {P}┃ {C}--sc-only    {W}Exit after SCD");
     println!("   {P}┃ {C}--hwdec      {W}Use GPU decode");
     println!("{C}-r {P}┃ {C}--range      {W}Trim and splice: {G}\"10-20,90-100\"");
-    println!("{C}-a {P}┃ {C}--audio      {W}Opus Enc: {Y}-a {G}\"{R}<{G}auto{P}┃{G}norm{P}┃{G}bitrate{R}> {R}<{G}all{P}┃{G}stream_ids{R}>{G}\"");
+    println!("{C}-a {P}┃ {C}--audio      {W}Opus Enc: {Y}-a {G}\"{R}<{G}auto{P}┃{G}copy{P}┃{G}norm{P}┃{G}<kbps>{R}> {B}[{G}all{P}┃{G}<id1>{B}[{W},{G}<id2>{W},{G}...{B}]]{G}\"");
     println!("   {P}┃ {C}--guide      {W}Fullscreen and Nerd Fonts recommended");
     #[cfg(feature = "vship")]
     {
@@ -281,7 +281,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
     let (mut worker, mut chnk_buff, mut sc_only, mut hwdec) = (1usize, None, false, false);
     let (mut sc_file, mut inp, mut out) = (PathBuf::new(), PathBuf::new(), PathBuf::new());
     let (mut encoder, mut params) = (Encoder::default(), String::new());
-    let (mut au, mut ranges) = (None, None);
+    let (mut au, mut ranges) = (AuSpec::default(), None);
     #[cfg(feature = "vship")]
     let (mut tq, mut qp_range, mut cvvdp_conf, mut alt_param) = (
         None::<String>,
@@ -312,7 +312,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
             }
             "-a" | "--audio" => {
                 if let Some(v) = next_arg(args, &mut i) {
-                    au = Some(parse_au_arg(v)?);
+                    au = parse_au_arg(v)?;
                 }
             }
             #[cfg(feature = "vship")]
@@ -564,8 +564,10 @@ type AuResult = Vec<(AuStream, PathBuf)>;
 type AuHandle = JoinHandle<Result<AuResult, Xerr>>;
 
 fn spawn_au(args: &Args, work_dir: &Path, inf: &VidInf) -> Option<AuHandle> {
-    (!args.sc_file.exists() && args.au.is_some() && args.encoder != Avm).then(|| {
-        let spec = unsafe { args.au.as_ref().unwrap_unchecked() }.clone();
+    (!args.sc_file.exists()
+    && !matches!(args.au.mode, AuMode::Passthru)
+    && args.encoder != Avm).then(|| {
+        let spec = args.au.clone();
         let inp = args.inp.clone();
         let wd = work_dir.to_path_buf();
         let ranges = args.ranges.clone();
@@ -699,7 +701,8 @@ fn main_with_args(args: &Args) -> Result<(), Xerr> {
     enc_all(&chnks, &inf, &args, &args.inp, &work_dir, pipe_reader);
     let enc_time = enc_start.elapsed() + Durat::from_secs(prior_secs);
 
-    let au_tracks = if let Some(ref au_spec) = args.au
+    let au_tracks = if let ref au_spec = args.au
+        && !matches!(au_spec.mode, AuMode::Passthru)
         && args.encoder != Avm
     {
         acq_au(au_spec, au_files, &args, &inf, &work_dir)?
