@@ -43,6 +43,7 @@ unsafe extern "C" {
         in_count: c_int,
     ) -> c_int;
     fn swr_free(s: *mut *mut c_void);
+    fn av_channel_layout_describe(ch_layout: *const c_void, buf: *mut i8, buf_size: usize) -> c_int;
 }
 
 pub struct AuDecoder {
@@ -54,6 +55,7 @@ pub struct AuDecoder {
     stream_idx: c_int,
     channels: u8,
     tot_samples: i64,
+    layout_str: String,
 }
 
 unsafe impl Send for AuDecoder {}
@@ -87,6 +89,10 @@ impl AuDecoder {
             let stream = *(*fmt_ctx).streams.add(idx as usize);
             let par = &*(*stream).codecpar;
             let channels = par.ch_layout.nb_channels as u8;
+            let mut buf = [0i8; 256];
+            let ch_layout_ptr = from_ref(&par.ch_layout).cast::<c_void>();
+            av_channel_layout_describe(ch_layout_ptr, buf.as_mut_ptr(), 256);
+            let layout_str = std::ffi::CStr::from_ptr(buf.as_ptr()).to_string_lossy().to_string();
 
             let tot_samples = if (*stream).duration > 0 && (*stream).time_base.den > 0 {
                 (*stream).duration * i64::from((*stream).time_base.num) * 48000
@@ -140,6 +146,7 @@ impl AuDecoder {
                 stream_idx: idx,
                 channels,
                 tot_samples,
+                layout_str,
             })
         }
     }
@@ -150,6 +157,10 @@ impl AuDecoder {
 
     pub const fn tot_samples(&self) -> i64 {
         self.tot_samples
+    }
+
+    pub fn layout_str(&self) -> &str {
+        &self.layout_str
     }
 
     pub fn dec_all<F: FnMut(&mut [f32]) -> Result<(), Xerr>>(

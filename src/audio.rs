@@ -68,6 +68,7 @@ pub struct AuStream {
     pub channels: u8,
     pub lang: Option<Cow<'static, str>>,
     pub bitrate: u16,
+    pub layout: String,
 }
 
 fn parse_norm(s: &str) -> Result<NormParams, Xerr> {
@@ -127,16 +128,17 @@ pub fn parse_au_arg(arg: &str) -> Result<AuSpec, Xerr> {
 }
 
 fn get_streams(inp: &Path) -> Result<Vec<AuStream>, Xerr> {
-    get_au_streams(inp).map(|v| {
-        v.into_iter()
-            .map(|(index, channels, lang)| AuStream {
-                index,
-                channels,
-                lang,
-                bitrate: 0,
-            })
-            .collect()
-    })
+    get_au_streams(inp)?.into_iter().map(|(index, channels, lang)| {
+        let dec = AuDecoder::new(inp, index as i32)?;
+        let layout = dec.layout_str().to_string();
+        Ok(AuStream {
+            index,
+            channels,
+            lang,
+            bitrate: 0,
+            layout,
+        })
+    }).collect()
 }
 
 pub fn frame_samp(frame: usize, fps_num: u32, fps_den: u32, rate: u32) -> i64 {
@@ -158,6 +160,17 @@ fn reord_surround(buf: &mut [f32], channels: usize, num_samples: usize) {
             tmp[j] = buf[base + m];
         }
         buf[base..base + channels].copy_from_slice(&tmp[..channels]);
+    }
+}
+
+fn reord_5_1_side_to_7_1(src: &[f32], dst: &mut [f32], num_samples: usize) {
+    const MAP: &[usize] = &[0, 2, 1, 7, 3, 4];
+    for i in 0..num_samples {
+        let src_base = i * 6;
+        let dst_base = i * 8;
+        for (src_idx, &dst_idx) in MAP.iter().enumerate() {
+            dst[dst_base + dst_idx] = src[src_base + src_idx];
+        }
     }
 }
 
@@ -201,6 +214,12 @@ fn enc_direct(
 ) -> Result<(), Xerr> {
     let mut dec = AuDecoder::new(inp, i32::from(stream.index))?;
     let ch = usize::from(dec.channels());
+    let is_5_1_side = stream.layout.contains("5.1(side)");
+    let effective_ch = if is_5_1_side {
+        8
+    } else {
+        ch
+    };
     let tot: i64 = samp_ranges.map_or_else(
         || dec.tot_samples(),
         |r| r.iter().map(|&(s, e)| e - s).sum(),
@@ -210,7 +229,7 @@ fn enc_direct(
     } else {
         FAMILY_SURROUND
     };
-    let mut enc = Encoder::new(out, ch as u8, br, family)?;
+    let mut enc = Encoder::new(out, effective_ch as u8, br, family)?;
     let mut progs = ProgsBar::new();
     let mut enced: i64 = 0;
     let tid = stream.index;
@@ -218,10 +237,16 @@ fn enc_direct(
 
     let cb = |chnk: &mut [f32]| -> Result<(), Xerr> {
         let n = (chnk.len() / ch) as i64;
-        if need_reord {
-            reord_surround(chnk, ch, n as usize);
+        if is_5_1_side {
+            let mut new_chnk = vec![0.0f32; n as usize * 8];
+            reord_5_1_side_to_7_1(chnk, &mut new_chnk, n as usize);
+            enc.write_float(&new_chnk, 8)?;
+        } else {
+            if need_reord {
+                reord_surround(chnk, ch, n as usize);
+            }
+            enc.write_float(chnk, ch)?;
         }
-        enc.write_float(chnk, ch)?;
         enced += n;
         progs.up_au(enced as usize, tot as usize, progs_line, 1, tid);
         Ok(())
@@ -393,7 +418,12 @@ pub fn enc_au_streams(
                         };
                         (128.0 * (cc / 2.0f32).powf(0.75)) as u16
                     }
-                    AuMode::Bitrate(b) => b,
+                    AuMode::Bitrate(mut b) => {
+                        if s.layout.contains("5.1(side)") {
+                            b = (b as f32 * (7.1 / 5.1f32).powf(0.75)) as u16;
+                        }
+                        b
+                    }
                     AuMode::Passthru => 0
                 },
                 |p| p.br,
