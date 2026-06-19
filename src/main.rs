@@ -5,7 +5,7 @@ use std::{
     env::args as env_args,
     fs::{
         create_dir_all, read_to_string as read_to_str, remove_dir_all as rm_dir_all,
-        remove_file as rm_file, write as write_to,
+        remove_file as rm_file, write as write_to, OpenOptions,
     },
     hash::{Hash as _, Hasher as _},
     io::{Write as _, stdout},
@@ -115,6 +115,7 @@ pub struct Args {
     pub sc_only: bool,
     pub hwdec: bool,
     pub crop: Option<(i32, i32)>,
+    pub temp: PathBuf,
 }
 
 extern "C" fn restore() {
@@ -140,6 +141,7 @@ fn print_help() {
     println!("   {P}┃ {C}--sc-only    {W}Exit after SCD");
     println!("   {P}┃ {C}--hwdec      {W}Use GPU decode");
     println!("{C}-c {P}┃ {C}--crop       {W}Crop: {G}<x>{B}[{P}:{G}<y>{B}]");
+    println!("   {P}┃ {C}--temp   {W}Set directory for temporary files");
     println!("{C}-r {P}┃ {C}--range      {W}Trim and splice: {G}\"10-20,90-100\"");
     println!("{C}-a {P}┃ {C}--audio      {W}Opus Enc: {Y}-a {G}\"{R}<{G}auto{P}┃{G}copy{P}┃{G}norm{P}┃{G}<kbps>{R}> {B}[{G}all{P}┃{G}<id1>{B}[{W},{G}<id2>{W},{G}...{B}]]{G}\"");
     println!("   {P}┃ {C}--guide      {W}Fullscreen and Nerd Fonts recommended");
@@ -299,7 +301,7 @@ macro_rules! arg {
 
 fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
     let (mut worker, mut chnk_buff, mut sc_only, mut hwdec) = (1usize, None, false, false);
-    let (mut sc_file, mut inp, mut out) = (PathBuf::new(), PathBuf::new(), PathBuf::new());
+    let (mut sc_file, mut inp, mut out, mut temp) = (PathBuf::new(), PathBuf::new(), PathBuf::new(), PathBuf::new());
     let (mut encoder, mut params) = (Encoder::default(), String::new());
     let (mut au, mut ranges, mut crop) = (AuSpec::default(), None, None);
     #[cfg(feature = "vship")]
@@ -354,6 +356,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
                     crop = Some(parse_crop_arg(v)?);
                 }
             }
+            "--temp" => arg!(path args, i, temp),
             "-h" | "--help" => {
                 print_help();
                 return Err(Help);
@@ -388,6 +391,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
         sc_only,
         hwdec,
         crop,
+        temp,
         #[cfg(feature = "vship")]
         tq,
         #[cfg(feature = "vship")]
@@ -410,11 +414,11 @@ fn get_args(args: &[String], allow_resume: bool) -> Result<Args, Xerr> {
 
     let mut result = parse_args_loop(args)?;
 
-    if result.inp == PathBuf::new() {
-        return Err("Missing input".into());
+    if result.inp == PathBuf::new() && result.temp == PathBuf::new() {
+        return Err("Missing input or temp dir".into());
     }
 
-    if allow_resume && let Ok(saved_args) = get_saved_args(&result.inp) {
+    if allow_resume && let Ok(saved_args) = get_saved_args(&result) {
         return Ok(saved_args);
     }
     if result.out != PathBuf::new() {
@@ -454,6 +458,31 @@ fn hash_inp(path: &Path) -> String {
     format!("{:x}", hasher.finish())
 }
 
+fn get_work_dir(args: &Args) -> Result<PathBuf, Xerr> {
+    if args.temp != PathBuf::new() {
+        Ok(args.temp.clone())
+    } else {
+        let canon = args.inp.canonicalize()?;
+        let hash = hash_inp(&canon);
+        Ok(canon.with_file_name(format!(".{}", &hash[..7])))
+    }
+}
+
+fn ensure_writable_dir(path: &Path) -> Result<(), Xerr> {
+    create_dir_all(path)?;
+    let probe = path.join(".xav_write_test");
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&probe)
+        .map_err(|e| format!("Could not write to temp dir {}: {}", path.display(), e))?;
+    file.write_all(&[])?;
+    file.sync_all()?;
+    rm_file(probe)?;
+    Ok(())
+}
+
 fn save_args(work_dir: &Path) -> Result<(), Xerr> {
     let cmd: Vec<String> = env_args().collect();
     let quoted_cmd: Vec<String> = cmd
@@ -470,13 +499,13 @@ fn save_args(work_dir: &Path) -> Result<(), Xerr> {
     Ok(())
 }
 
-fn get_saved_args(inp: &Path) -> Result<Args, Xerr> {
-    let canon = inp.canonicalize()?;
-    let hash = hash_inp(&canon);
-    let work_dir = canon.with_file_name(format!(".{}", &hash[..7]));
+fn get_saved_args(args: &Args) -> Result<Args, Xerr> {
+    let work_dir = get_work_dir(args)?;
     let cmd_path = work_dir.join("cmd.txt");
 
-    if cmd_path.exists() && get_resume(&work_dir).is_some_and(|r| !r.chnks_done.is_empty()) {
+    if cmd_path.exists()
+       && (get_resume(&work_dir).is_some_and(|r| !r.chnks_done.is_empty())
+           || args.temp != PathBuf::new() && args.inp == PathBuf::new()) {
         let cmd_line = read_to_str(cmd_path)?;
         let saved_args = parse_quoted_args(&cmd_line);
         get_args(&saved_args, false)
@@ -683,9 +712,8 @@ fn main_with_args(args: &Args) -> Result<(), Xerr> {
     _ = stdout().flush();
     IN_ALT_SCREEN.store(true, Relaxed);
 
-    let canon_inp = args.inp.canonicalize()?;
-    let hash = hash_inp(&canon_inp);
-    let work_dir = canon_inp.with_file_name(format!(".{}", &hash[..7]));
+    let work_dir = get_work_dir(args)?;
+    ensure_writable_dir(&work_dir)?;
 
     create_dir_all(&work_dir)?;
 
