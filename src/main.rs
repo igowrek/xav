@@ -114,6 +114,7 @@ pub struct Args {
     pub alt_param: Option<String>,
     pub sc_only: bool,
     pub hwdec: bool,
+    pub crop: Option<(i32, i32)>,
 }
 
 extern "C" fn restore() {
@@ -138,6 +139,7 @@ fn print_help() {
     println!("{C}-s {P}┃ {C}--sc         {W}Specify SCD file");
     println!("   {P}┃ {C}--sc-only    {W}Exit after SCD");
     println!("   {P}┃ {C}--hwdec      {W}Use GPU decode");
+    println!("{C}-c {P}┃ {C}--crop       {W}Crop: {G}<x>{B}[{P}:{G}<y>{B}]");
     println!("{C}-r {P}┃ {C}--range      {W}Trim and splice: {G}\"10-20,90-100\"");
     println!("{C}-a {P}┃ {C}--audio      {W}Opus Enc: {Y}-a {G}\"{R}<{G}auto{P}┃{G}copy{P}┃{G}norm{P}┃{G}<kbps>{R}> {B}[{G}all{P}┃{G}<id1>{B}[{W},{G}<id2>{W},{G}...{B}]]{G}\"");
     println!("   {P}┃ {C}--guide      {W}Fullscreen and Nerd Fonts recommended");
@@ -199,6 +201,24 @@ fn parse_ranges(s: &str) -> Result<Vec<(usize, usize)>, Xerr> {
             Ok((a.trim().parse()?, b.trim().parse()?))
         })
         .collect()
+}
+
+fn parse_crop_arg(s: &str) -> Result<(i32, i32), Xerr> {
+    let parts: Vec<&str> = s.split(':').map(|c| c.trim()).collect();
+    let (cv, ch) = match parts.as_slice() {
+        [x] => (-1, x.parse::<i32>()?),
+        [x, y] => (y.parse::<i32>()?, x.parse::<i32>()?),
+        _ => {
+            return Err("Crop format: '-c x:y' or '-c x'".into())
+        }
+    };
+    if cv < -1 || ch < -1 {
+        return Err("Crop values must be positive or -1".into());
+    } else if (cv % 2 != 0 || ch % 2 != 0) && cv != -1 && ch != -1 {
+        return Err("Crop values must be even".into());
+    }
+
+    Ok((cv, ch))
 }
 
 fn apply_defaults(args: &mut Args) {
@@ -281,7 +301,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
     let (mut worker, mut chnk_buff, mut sc_only, mut hwdec) = (1usize, None, false, false);
     let (mut sc_file, mut inp, mut out) = (PathBuf::new(), PathBuf::new(), PathBuf::new());
     let (mut encoder, mut params) = (Encoder::default(), String::new());
-    let (mut au, mut ranges) = (AuSpec::default(), None);
+    let (mut au, mut ranges, mut crop) = (AuSpec::default(), None, None);
     #[cfg(feature = "vship")]
     let (mut tq, mut qp_range, mut cvvdp_conf, mut alt_param) = (
         None::<String>,
@@ -329,6 +349,11 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
             "-P" | "--alt-param" => arg!(opt args, i, alt_param),
             "--hwdec" => hwdec = true,
             "--sc-only" => sc_only = true,
+            "-c" | "--crop" => {
+                if let Some(v) = next_arg(args, &mut i) {
+                    crop = Some(parse_crop_arg(v)?);
+                }
+            }
             "-h" | "--help" => {
                 print_help();
                 return Err(Help);
@@ -362,6 +387,7 @@ fn parse_args_loop(args: &[String]) -> Result<Args, Xerr> {
         ranges,
         sc_only,
         hwdec,
+        crop,
         #[cfg(feature = "vship")]
         tq,
         #[cfg(feature = "vship")]
@@ -504,6 +530,38 @@ const fn scale_crop(
     (scaled_v, scaled_h)
 }
 
+fn get_crop(crop: Option<(i32, i32)>, inp: &Path, inf: &VidInf) -> Result<(u32, u32), Xerr> {
+    let (crop_v, crop_h) = if let Some((cv, ch)) = crop {
+        if (cv * 2 + 2) >= inf.height as i32 || (ch * 2 + 2) >= inf.width as i32 {
+            return Err("Crop values are too large for the video dimensions".into());
+        }
+        (cv, ch)
+    } else {
+        (-1, -1)
+    };
+
+    if crop_v != -1 && crop_h != -1 {
+        Ok((crop_v as u32, crop_h as u32))
+    } else {
+        let thr = unsafe { available_parallelism().unwrap_unchecked().get() as i32 };
+        let conf = CropConf {
+            sample_cnt: 13,
+            min_black_pix: 2,
+        };
+        let (mut cv, mut ch) = match detect_crop(&inp, &inf, &conf, thr, 1) {
+            Ok(detected) if detected.has_crop() => detected.to_tuple(),
+            _ => (0, 0),
+        };
+        if crop_v != -1 {
+            cv = crop_v as u32;
+        }
+        if crop_h != -1 {
+            ch = crop_h as u32;
+        }
+        Ok((cv, ch))
+    }
+}
+
 fn init_pipe_crop(
     inf: VidInf,
     crop: (u32, u32),
@@ -643,15 +701,7 @@ fn main_with_args(args: &Args) -> Result<(), Xerr> {
 
     let au_handle = spawn_au(args, &work_dir, &inf);
 
-    let thr = unsafe { available_parallelism().unwrap_unchecked().get() as i32 };
-    let conf = CropConf {
-        sample_cnt: 13,
-        min_black_pix: 2,
-    };
-    let crop = match detect_crop(&args.inp, &inf, &conf, thr, 1) {
-        Ok(detected) if detected.has_crop() => detected.to_tuple(),
-        _ => (0, 0),
-    };
+    let crop = get_crop(args.crop, &args.inp, &inf)?;
 
     let au_files = scd_and_au(args, &inf, crop, au_handle)?;
 
